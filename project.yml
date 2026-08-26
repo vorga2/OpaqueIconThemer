@@ -21,3 +21,4 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: OpaqueIconThemer
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "OpaqueIconThemer сохраняет сгенерированную tinted-иконку, чтобы выбрать её при добавлении Команды на экран Домой."
+        INFOPLIST_KEY_NSUserTrackingUsageDescription: "Разрешение используется для работы с данными приложений на этом устройстве. Данные не отправляются на сервер."
