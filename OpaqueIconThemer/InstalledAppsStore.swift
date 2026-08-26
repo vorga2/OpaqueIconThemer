@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import AppTrackingTransparency
 
 struct InstalledAppInfo: Identifiable, Hashable {
     let bundleIdentifier: String
@@ -39,7 +40,15 @@ final class InstalledAppsStore: ObservableObject {
         status = "Сканирую локально…"
 
         Task { @MainActor in
+            if ATTrackingManager.trackingAuthorizationStatus == .notDetermined {
+                status = "Жду системное разрешение…"
+                _ = await ATTrackingManager.requestTrackingAuthorization()
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+
+            status = "Проверяю LaunchServices…"
             await Task.yield()
+
             let raw = OITPrivateAppScanner.installedApplications()
             apps = raw.map {
                 InstalledAppInfo(
