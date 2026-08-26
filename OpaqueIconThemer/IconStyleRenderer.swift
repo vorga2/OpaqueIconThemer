@@ -1,3 +1,4 @@
+import Foundation
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import UIKit
@@ -35,39 +36,23 @@ final class IconStyleRenderer {
     func render(source: UIImage, tint: UIColor, options: IconRenderOptions) -> UIImage? {
         guard let normalized = normalizedIcon(source) else { return nil }
 
-        let resolved = resolvedMode(source: normalized, requested: options.mode)
-        switch resolved {
-        case .tint:
-            return renderTint(
-                source: normalized,
-                tint: tint,
-                intensity: options.tintIntensity
-            )
-
+        switch resolvedMode(source: normalized, requested: options.mode) {
         case .smartLogo:
-            if let mask = smartLogoMask(from: normalized) {
-                return renderSmartLogo(
-                    source: normalized,
-                    mask: mask,
-                    tint: tint,
-                    gradientStart: options.gradientStart,
-                    gradientStrength: options.gradientStrength
-                )
-            }
-
-            return renderTint(
+            if let result = renderSmartLogo(
                 source: normalized,
                 tint: tint,
-                intensity: options.tintIntensity
-            )
+                gradientStart: options.gradientStart,
+                gradientStrength: options.gradientStrength
+            ) {
+                return result
+            }
+            return renderTint(source: normalized, tint: tint, intensity: options.tintIntensity)
+
+        case .tint:
+            return renderTint(source: normalized, tint: tint, intensity: options.tintIntensity)
 
         case .auto:
-            // resolvedMode never returns .auto, but keep a safe fallback.
-            return renderTint(
-                source: normalized,
-                tint: tint,
-                intensity: options.tintIntensity
-            )
+            return renderTint(source: normalized, tint: tint, intensity: options.tintIntensity)
         }
     }
 
@@ -78,7 +63,7 @@ final class IconStyleRenderer {
         return looksLikeSimpleLogo(normalized) ? .smartLogo : .tint
     }
 
-    // MARK: - Auto classification
+    // MARK: - Analysis
 
     private struct RGB {
         let r: CGFloat
@@ -102,7 +87,7 @@ final class IconStyleRenderer {
         var histogram = [Int](repeating: 0, count: 16)
         var colorBins = [Int](repeating: 0, count: 64)
         var borderColors: [RGB] = []
-        var opaque = 0
+        var opaqueCount = 0
         let border = 6
 
         for y in 0..<height {
@@ -110,21 +95,18 @@ final class IconStyleRenderer {
                 let index = y * width + x
                 let p = index * 4
                 let alpha = CGFloat(pixels[p + 3]) / 255.0
-                guard alpha > 0.12 else { continue }
+                guard alpha > 0.08 else { continue }
 
-                let r = CGFloat(pixels[p]) / 255.0
-                let g = CGFloat(pixels[p + 1]) / 255.0
-                let b = CGFloat(pixels[p + 2]) / 255.0
-                let rgb = RGB(r: r, g: g, b: b)
+                let rgb = unpremultipliedRGB(pixels: pixels, pixelOffset: p, alpha: alpha)
+                opaqueCount += 1
 
-                opaque += 1
-                let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                let lum = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b
                 luminance[index] = lum
                 histogram[min(15, Int(lum * 15.999))] += 1
 
-                let qr = min(3, Int(r * 3.999))
-                let qg = min(3, Int(g * 3.999))
-                let qb = min(3, Int(b * 3.999))
+                let qr = min(3, Int(rgb.r * 3.999))
+                let qg = min(3, Int(rgb.g * 3.999))
+                let qb = min(3, Int(rgb.b * 3.999))
                 colorBins[(qr << 4) | (qg << 2) | qb] += 1
 
                 if x < border || x >= width - border || y < border || y >= height - border {
@@ -133,7 +115,7 @@ final class IconStyleRenderer {
             }
         }
 
-        guard opaque > width * height / 4, !borderColors.isEmpty else { return false }
+        guard opaqueCount > width * height / 4, !borderColors.isEmpty else { return false }
 
         var edgeCount = 0
         var edgeSamples = 0
@@ -151,13 +133,12 @@ final class IconStyleRenderer {
 
         var entropy: CGFloat = 0
         for count in histogram where count > 0 {
-            let probability = CGFloat(count) / CGFloat(opaque)
+            let probability = CGFloat(count) / CGFloat(opaqueCount)
             entropy -= probability * log2(probability)
         }
 
-        let minimumBinPopulation = max(2, opaque / 250)
+        let minimumBinPopulation = max(2, opaqueCount / 250)
         let occupiedColorBins = colorBins.filter { $0 >= minimumBinPopulation }.count
-
         let backgroundMean = meanColor(borderColors)
         let backgroundVariation = borderColors.reduce(CGFloat.zero) {
             $0 + $1.distance(to: backgroundMean)
@@ -174,7 +155,6 @@ final class IconStyleRenderer {
             entropyScore * 0.22 +
             backgroundScore * 0.09
 
-        // Conservative by design: if Auto is unsure, Tint looks much better than a bad mask.
         guard complexity < 0.50,
               edgeDensity < 0.225,
               occupiedColorBins <= 32,
@@ -183,60 +163,95 @@ final class IconStyleRenderer {
             return false
         }
 
-        // Also require a usable foreground mask before calling it a logo.
-        return smartLogoMask(from: image) != nil
+        return logoSegmentation(from: image, width: 160, height: 160) != nil
     }
 
     // MARK: - Smart logo segmentation
 
-    private func smartLogoMask(from image: UIImage) -> UIImage? {
-        let width = 256
-        let height = 256
+    private struct LogoSegmentation {
+        let pixels: [UInt8]
+        let width: Int
+        let height: Int
+        let allowedMask: [Bool]
+        let softAlpha: [CGFloat]
+        let corners: [RGB]
+    }
+
+    private func logoSegmentation(from image: UIImage, width: Int, height: Int) -> LogoSegmentation? {
         guard let pixels = rgbaPixels(from: image, width: width, height: height) else { return nil }
 
         let references = borderReferences(pixels: pixels, width: width, height: height)
         guard !references.isEmpty else { return nil }
 
-        let borderPixels = sampledBorderColors(pixels: pixels, width: width, height: height)
-        let backgroundMean = meanColor(borderPixels.isEmpty ? references : borderPixels)
-        let backgroundVariation = (borderPixels.isEmpty ? references : borderPixels).reduce(CGFloat.zero) {
+        let sampledBorder = sampledBorderColors(pixels: pixels, width: width, height: height)
+        let borderForStats = sampledBorder.isEmpty ? references : sampledBorder
+        let backgroundMean = meanColor(borderForStats)
+        let backgroundVariation = borderForStats.reduce(CGFloat.zero) {
             $0 + $1.distance(to: backgroundMean)
-        } / CGFloat(max(1, (borderPixels.isEmpty ? references : borderPixels).count))
+        } / CGFloat(max(1, borderForStats.count))
 
-        let threshold = min(0.27, max(0.09, 0.105 + backgroundVariation * 0.72))
-        var mask = [Bool](repeating: false, count: width * height)
+        let threshold = min(0.28, max(0.075, 0.095 + backgroundVariation * 0.72))
+        var hardMask = [Bool](repeating: false, count: width * height)
+        var rawSoftAlpha = [CGFloat](repeating: 0, count: width * height)
 
         for y in 0..<height {
             for x in 0..<width {
                 let i = y * width + x
                 let p = i * 4
-                let alpha = CGFloat(pixels[p + 3]) / 255.0
-                guard alpha > 0.14 else { continue }
+                let sourceAlpha = CGFloat(pixels[p + 3]) / 255.0
+                guard sourceAlpha > 0.015 else { continue }
 
-                let rgb = RGB(
-                    r: CGFloat(pixels[p]) / 255.0,
-                    g: CGFloat(pixels[p + 1]) / 255.0,
-                    b: CGFloat(pixels[p + 2]) / 255.0
-                )
-
+                let rgb = unpremultipliedRGB(pixels: pixels, pixelOffset: p, alpha: sourceAlpha)
                 let distance = references.map { rgb.distance(to: $0) }.min() ?? 1
-                mask[i] = distance > threshold
+
+                // Hard mask is used only to understand the shape. The actual rendering uses
+                // the soft mask below, so translucent strokes and antialiased edges survive.
+                hardMask[i] = distance > threshold * 0.82
+
+                let inferredOpacity = smoothstep(
+                    edge0: threshold * 0.28,
+                    edge1: max(threshold * 1.90, threshold + 0.08),
+                    value: distance
+                )
+                rawSoftAlpha[i] = inferredOpacity * sourceAlpha
             }
         }
 
-        mask = majorityFilter(mask, width: width, height: height)
-        mask = keepMeaningfulComponents(
-            mask,
+        hardMask = majorityFilter(hardMask, width: width, height: height)
+        hardMask = keepMeaningfulComponents(
+            hardMask,
             width: width,
             height: height,
-            minimumSize: max(18, Int(CGFloat(width * height) * 0.0012))
+            minimumSize: max(6, Int(CGFloat(width * height) * 0.00006))
         )
 
-        let foreground = mask.reduce(0) { $0 + ($1 ? 1 : 0) }
+        // Let the soft mask extend a couple of pixels beyond the hard shape. This keeps
+        // transparent outlines, shadows and antialiasing instead of cutting them off.
+        let allowedMask = dilateMask(hardMask, width: width, height: height, radius: 2)
+        let foreground = hardMask.reduce(0) { $0 + ($1 ? 1 : 0) }
         let coverage = CGFloat(foreground) / CGFloat(width * height)
-        guard coverage >= 0.022, coverage <= 0.70 else { return nil }
+        guard coverage >= 0.015, coverage <= 0.72 else { return nil }
 
-        return maskImage(from: mask, width: width, height: height)
+        var softAlpha = rawSoftAlpha
+        for i in 0..<softAlpha.count where !allowedMask[i] {
+            softAlpha[i] = 0
+        }
+
+        let corners = cornerBackgrounds(
+            pixels: pixels,
+            width: width,
+            height: height,
+            fallback: backgroundMean
+        )
+
+        return LogoSegmentation(
+            pixels: pixels,
+            width: width,
+            height: height,
+            allowedMask: allowedMask,
+            softAlpha: softAlpha,
+            corners: corners
+        )
     }
 
     private func borderReferences(pixels: [UInt8], width: Int, height: Int) -> [RGB] {
@@ -257,6 +272,21 @@ final class IconStyleRenderer {
         }
     }
 
+    private func cornerBackgrounds(
+        pixels: [UInt8],
+        width: Int,
+        height: Int,
+        fallback: RGB
+    ) -> [RGB] {
+        let radius = max(3, min(width, height) / 24)
+        return [
+            patchMean(pixels: pixels, width: width, height: height, cx: radius, cy: radius, radius: radius) ?? fallback,
+            patchMean(pixels: pixels, width: width, height: height, cx: width - 1 - radius, cy: radius, radius: radius) ?? fallback,
+            patchMean(pixels: pixels, width: width, height: height, cx: radius, cy: height - 1 - radius, radius: radius) ?? fallback,
+            patchMean(pixels: pixels, width: width, height: height, cx: width - 1 - radius, cy: height - 1 - radius, radius: radius) ?? fallback
+        ]
+    }
+
     private func sampledBorderColors(pixels: [UInt8], width: Int, height: Int) -> [RGB] {
         var output: [RGB] = []
         let border = max(3, min(width, height) / 24)
@@ -267,12 +297,8 @@ final class IconStyleRenderer {
                 guard x < border || x >= width - border || y < border || y >= height - border else { continue }
                 let p = (y * width + x) * 4
                 let alpha = CGFloat(pixels[p + 3]) / 255.0
-                guard alpha > 0.15 else { continue }
-                output.append(RGB(
-                    r: CGFloat(pixels[p]) / 255.0,
-                    g: CGFloat(pixels[p + 1]) / 255.0,
-                    b: CGFloat(pixels[p + 2]) / 255.0
-                ))
+                guard alpha > 0.08 else { continue }
+                output.append(unpremultipliedRGB(pixels: pixels, pixelOffset: p, alpha: alpha))
             }
         }
         return output
@@ -289,7 +315,7 @@ final class IconStyleRenderer {
         var r: CGFloat = 0
         var g: CGFloat = 0
         var b: CGFloat = 0
-        var count: CGFloat = 0
+        var weight: CGFloat = 0
 
         let minX = max(0, cx - radius)
         let maxX = min(width - 1, cx + radius)
@@ -300,16 +326,17 @@ final class IconStyleRenderer {
             for x in minX...maxX {
                 let p = (y * width + x) * 4
                 let alpha = CGFloat(pixels[p + 3]) / 255.0
-                guard alpha > 0.15 else { continue }
-                r += CGFloat(pixels[p]) / 255.0
-                g += CGFloat(pixels[p + 1]) / 255.0
-                b += CGFloat(pixels[p + 2]) / 255.0
-                count += 1
+                guard alpha > 0.08 else { continue }
+                let rgb = unpremultipliedRGB(pixels: pixels, pixelOffset: p, alpha: alpha)
+                r += rgb.r * alpha
+                g += rgb.g * alpha
+                b += rgb.b * alpha
+                weight += alpha
             }
         }
 
-        guard count > 0 else { return nil }
-        return RGB(r: r / count, g: g / count, b: b / count)
+        guard weight > 0 else { return nil }
+        return RGB(r: r / weight, g: g / weight, b: b / weight)
     }
 
     private func majorityFilter(_ source: [Bool], width: Int, height: Int) -> [Bool] {
@@ -326,11 +353,7 @@ final class IconStyleRenderer {
                 }
 
                 let i = y * width + x
-                if source[i] {
-                    result[i] = count >= 3
-                } else {
-                    result[i] = count >= 6
-                }
+                result[i] = source[i] ? count >= 3 : count >= 6
             }
         }
         return result
@@ -359,7 +382,6 @@ final class IconStyleRenderer {
 
                 let x = current % width
                 let y = current / width
-
                 for (dx, dy) in directions {
                     let nx = x + dx
                     let ny = y + dy
@@ -379,53 +401,101 @@ final class IconStyleRenderer {
         return output
     }
 
+    private func dilateMask(_ source: [Bool], width: Int, height: Int, radius: Int) -> [Bool] {
+        guard radius > 0 else { return source }
+        var result = source
+
+        for y in 0..<height {
+            for x in 0..<width where source[y * width + x] {
+                let minY = max(0, y - radius)
+                let maxY = min(height - 1, y + radius)
+                let minX = max(0, x - radius)
+                let maxX = min(width - 1, x + radius)
+                for ny in minY...maxY {
+                    for nx in minX...maxX {
+                        result[ny * width + nx] = true
+                    }
+                }
+            }
+        }
+        return result
+    }
+
     // MARK: - Rendering
 
     private func renderSmartLogo(
         source: UIImage,
-        mask: UIImage,
         tint: UIColor,
         gradientStart: CGFloat,
         gradientStrength: CGFloat
-    ) -> UIImage {
-        let size = CGSize(width: 1024, height: 1024)
-        let rect = CGRect(origin: .zero, size: size)
-        let start = min(0.90, max(0.05, gradientStart))
-        let strength = min(0.65, max(0, gradientStrength))
-        let bottomColor = mixedColor(.white, tint, amount: strength)
-
-        let transparentFormat = UIGraphicsImageRendererFormat()
-        transparentFormat.opaque = false
-        transparentFormat.scale = 1
-
-        let logoOverlay = UIGraphicsImageRenderer(size: size, format: transparentFormat).image { ctx in
-            let cg = ctx.cgContext
-            let colors = [UIColor.white.cgColor, UIColor.white.cgColor, bottomColor.cgColor] as CFArray
-            let locations: [CGFloat] = [0, start, 1]
-            if let gradient = CGGradient(
-                colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                colors: colors,
-                locations: locations
-            ) {
-                cg.drawLinearGradient(
-                    gradient,
-                    start: CGPoint(x: size.width / 2, y: 0),
-                    end: CGPoint(x: size.width / 2, y: size.height),
-                    options: []
-                )
-            }
-            mask.draw(in: rect, blendMode: .destinationIn, alpha: 1)
+    ) -> UIImage? {
+        // 512px is enough for a clean Home Screen symbol while keeping live slider updates fast.
+        let workSize = 512
+        guard let segmentation = logoSegmentation(from: source, width: workSize, height: workSize) else {
+            return nil
         }
 
-        let finalFormat = UIGraphicsImageRendererFormat()
-        finalFormat.opaque = true
-        finalFormat.scale = 1
+        var output = segmentation.pixels
+        let start = min(0.90, max(0.05, gradientStart))
+        let strength = min(0.65, max(0, gradientStrength))
+        let tintRGB = rgb(from: tint)
 
-        return UIGraphicsImageRenderer(size: size, format: finalFormat).image { ctx in
-            ctx.cgContext.setFillColor(UIColor.black.cgColor)
-            ctx.cgContext.fill(rect)
-            source.draw(in: rect)
-            logoOverlay.draw(in: rect)
+        for y in 0..<segmentation.height {
+            let yNorm = CGFloat(y) / CGFloat(max(1, segmentation.height - 1))
+            let gradientProgress: CGFloat
+            if yNorm <= start {
+                gradientProgress = 0
+            } else {
+                gradientProgress = (yNorm - start) / max(0.001, 1 - start)
+            }
+
+            let logoMix = min(1, max(0, gradientProgress * strength))
+            let logoColor = RGB(
+                r: 1 + (tintRGB.r - 1) * logoMix,
+                g: 1 + (tintRGB.g - 1) * logoMix,
+                b: 1 + (tintRGB.b - 1) * logoMix
+            )
+
+            for x in 0..<segmentation.width {
+                let i = y * segmentation.width + x
+                guard segmentation.allowedMask[i] else { continue }
+
+                let opacity = min(1, max(0, segmentation.softAlpha[i]))
+                guard opacity > 0.001 else { continue }
+
+                let p = i * 4
+                let originalAlpha = CGFloat(segmentation.pixels[p + 3]) / 255.0
+                guard originalAlpha > 0 else { continue }
+
+                // Reconstruct the local background from the icon corners, then place the new
+                // white/gradient symbol on it using the inferred original opacity. This is the
+                // important part: semi-transparent strokes stay semi-transparent instead of
+                // becoming solid white blobs.
+                let xNorm = CGFloat(x) / CGFloat(max(1, segmentation.width - 1))
+                let background = bilinearBackground(segmentation.corners, x: xNorm, y: yNorm)
+                let result = RGB(
+                    r: background.r * (1 - opacity) + logoColor.r * opacity,
+                    g: background.g * (1 - opacity) + logoColor.g * opacity,
+                    b: background.b * (1 - opacity) + logoColor.b * opacity
+                )
+
+                output[p] = UInt8(clamping: Int(result.r * originalAlpha * 255.0 + 0.5))
+                output[p + 1] = UInt8(clamping: Int(result.g * originalAlpha * 255.0 + 0.5))
+                output[p + 2] = UInt8(clamping: Int(result.b * originalAlpha * 255.0 + 0.5))
+                output[p + 3] = segmentation.pixels[p + 3]
+            }
+        }
+
+        guard let workImage = imageFromRGBA(output, width: workSize, height: workSize) else { return nil }
+
+        let finalSize = CGSize(width: 1024, height: 1024)
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = false
+        format.scale = 1
+
+        return UIGraphicsImageRenderer(size: finalSize, format: format).image { ctx in
+            ctx.cgContext.interpolationQuality = .high
+            workImage.draw(in: CGRect(origin: .zero, size: finalSize))
         }
     }
 
@@ -502,16 +572,7 @@ final class IconStyleRenderer {
         return data
     }
 
-    private func maskImage(from mask: [Bool], width: Int, height: Int) -> UIImage? {
-        var data = [UInt8](repeating: 0, count: width * height * 4)
-        for i in 0..<mask.count where mask[i] {
-            let p = i * 4
-            data[p] = 255
-            data[p + 1] = 255
-            data[p + 2] = 255
-            data[p + 3] = 255
-        }
-
+    private func imageFromRGBA(_ data: [UInt8], width: Int, height: Int) -> UIImage? {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
 
@@ -535,6 +596,15 @@ final class IconStyleRenderer {
         return UIImage(cgImage: cgImage)
     }
 
+    private func unpremultipliedRGB(pixels: [UInt8], pixelOffset: Int, alpha: CGFloat) -> RGB {
+        guard alpha > 0.0001 else { return RGB(r: 0, g: 0, b: 0) }
+        return RGB(
+            r: min(1, CGFloat(pixels[pixelOffset]) / 255.0 / alpha),
+            g: min(1, CGFloat(pixels[pixelOffset + 1]) / 255.0 / alpha),
+            b: min(1, CGFloat(pixels[pixelOffset + 2]) / 255.0 / alpha)
+        )
+    }
+
     private func meanColor(_ colors: [RGB]) -> RGB {
         guard !colors.isEmpty else { return RGB(r: 0.5, g: 0.5, b: 0.5) }
         let count = CGFloat(colors.count)
@@ -549,24 +619,36 @@ final class IconStyleRenderer {
         return min(1, max(0, (value - low) / (high - low)))
     }
 
-    private func mixedColor(_ first: UIColor, _ second: UIColor, amount: CGFloat) -> UIColor {
-        let amount = min(1, max(0, amount))
-        var r1: CGFloat = 0
-        var g1: CGFloat = 0
-        var b1: CGFloat = 0
-        var a1: CGFloat = 0
-        var r2: CGFloat = 0
-        var g2: CGFloat = 0
-        var b2: CGFloat = 0
-        var a2: CGFloat = 0
-        first.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
-        second.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+    private func smoothstep(edge0: CGFloat, edge1: CGFloat, value: CGFloat) -> CGFloat {
+        guard edge1 > edge0 else { return value >= edge1 ? 1 : 0 }
+        let t = min(1, max(0, (value - edge0) / (edge1 - edge0)))
+        return t * t * (3 - 2 * t)
+    }
 
-        return UIColor(
-            red: r1 + (r2 - r1) * amount,
-            green: g1 + (g2 - g1) * amount,
-            blue: b1 + (b2 - b1) * amount,
-            alpha: a1 + (a2 - a1) * amount
+    private func bilinearBackground(_ corners: [RGB], x: CGFloat, y: CGFloat) -> RGB {
+        guard corners.count >= 4 else { return meanColor(corners) }
+        let top = mix(corners[0], corners[1], amount: x)
+        let bottom = mix(corners[2], corners[3], amount: x)
+        return mix(top, bottom, amount: y)
+    }
+
+    private func mix(_ first: RGB, _ second: RGB, amount: CGFloat) -> RGB {
+        let t = min(1, max(0, amount))
+        return RGB(
+            r: first.r + (second.r - first.r) * t,
+            g: first.g + (second.g - first.g) * t,
+            b: first.b + (second.b - first.b) * t
         )
+    }
+
+    private func rgb(from color: UIColor) -> RGB {
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        if color.getRed(&r, green: &g, blue: &b, alpha: &a) {
+            return RGB(r: r, g: g, b: b)
+        }
+        return RGB(r: 0, g: 0.478, b: 1)
     }
 }
