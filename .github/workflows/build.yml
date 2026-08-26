@@ -1,6 +1,9 @@
-name: Build OpaqueIconThemer
+name: Build OpaqueIconThemer Tint
 
 on:
+  push:
+    branches:
+      - tint-ipa-build
   workflow_dispatch:
 
 jobs:
@@ -42,5 +45,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: OpaqueIconThemer-IPA
+          name: OpaqueIconThemer-Tint-IPA
           path: ${{ runner.temp }}/OpaqueIconThemer.ipa
