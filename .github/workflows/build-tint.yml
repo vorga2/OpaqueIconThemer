@@ -2,15 +2,6 @@ name: Build Tint Utility Fast
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - .build-once
-
-concurrency:
-  group: tint-utility-one-shot
-  cancel-in-progress: true
 
 jobs:
   build:
