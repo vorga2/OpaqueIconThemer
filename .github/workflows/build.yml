@@ -2,13 +2,6 @@ name: Build OpaqueIconThemer
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-
-concurrency:
-  group: opaque-icon-themer-one-shot
-  cancel-in-progress: true
 
 jobs:
   build:
