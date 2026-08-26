@@ -62,6 +62,8 @@ final class InstalledAppsStore: ObservableObject {
 
             var familyCount = 0
             var familyStatus = "Screen Time API недоступен"
+
+            #if compiler(>=6.2)
             var familyBundleIDs: [String] = []
 
             if !screenTimeUnavailableForSession {
@@ -87,8 +89,6 @@ final class InstalledAppsStore: ObservableObject {
                                 guard seen.insert(key).inserted else { continue }
                                 familyBundleIDs.append(bundleID)
 
-                                // Keep every app Screen Time reports. No App Store-only filter:
-                                // development, sideloaded and custom apps remain in the list too.
                                 let token = application.token
                                 let tokenIcon = token.flatMap { Self.renderTokenIcon($0) }
 
@@ -114,8 +114,6 @@ final class InstalledAppsStore: ObservableObject {
                         let message = error.localizedDescription
                         if message.localizedCaseInsensitiveContains("helper application") ||
                             message.localizedCaseInsensitiveContains("communicate with a helper") {
-                            // This normally means the sideload provisioning profile did not
-                            // grant Apple's restricted Family Controls data entitlement.
                             screenTimeUnavailableForSession = true
                             familyStatus = "Screen Time недоступен для текущей sideload-подписи"
                         } else {
@@ -128,6 +126,12 @@ final class InstalledAppsStore: ObservableObject {
             } else {
                 familyStatus = "Screen Time отключён на эту сессию: helper недоступен"
             }
+            #else
+            // GitHub Actions currently builds with Xcode 16.4 / iOS 18.5 SDK.
+            // FamilyActivityData and approvedWithDataAccess are SDK-26 symbols, so keep
+            // this source buildable and use the on-device LaunchServices/MI fallbacks.
+            familyStatus = "Screen Time list требует Xcode 26 SDK; использую локальный сканер"
+            #endif
 
             status = familyCount > 0
                 ? "Получено по разрешению: \(familyCount). Проверяю названия и HD-иконки…"
@@ -341,8 +345,6 @@ final class InstalledAppsStore: ObservableObject {
 
     @MainActor
     private static func renderTokenIcon(_ token: ApplicationToken) -> UIImage? {
-        // The old 128pt token snapshot was visibly soft after the tint engine
-        // enlarged it to 1024px. Render a 512px source instead.
         let view = Label(token)
             .labelStyle(.iconOnly)
             .frame(width: 256, height: 256)
@@ -352,13 +354,13 @@ final class InstalledAppsStore: ObservableObject {
         return renderer.uiImage
     }
 
-    private static func preferredIcon(_ first: UIImage?, _ second: UIImage?) -> UIImage? {
+    nonisolated private static func preferredIcon(_ first: UIImage?, _ second: UIImage?) -> UIImage? {
         guard let first else { return second }
         guard let second else { return first }
         return pixelCount(second) > pixelCount(first) ? second : first
     }
 
-    private static func pixelCount(_ image: UIImage) -> Int {
+    nonisolated private static func pixelCount(_ image: UIImage) -> Int {
         if let cgImage = image.cgImage {
             return cgImage.width * cgImage.height
         }
