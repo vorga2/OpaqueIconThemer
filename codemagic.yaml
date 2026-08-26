@@ -4,7 +4,13 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 30
     triggering:
-      events: []
+      events:
+        - push
+      branch_patterns:
+        - pattern: 'main'
+          include: true
+          source: true
+      cancel_previous_builds: true
     environment:
       xcode: latest
     scripts:
