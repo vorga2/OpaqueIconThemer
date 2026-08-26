@@ -26,33 +26,60 @@ final class ThemeStore: ObservableObject {
         return UIImage(data: data)
     }
 
-    func importFolder(_ result: Result<[URL], Error>) {
+    func importFiles(_ result: Result<[URL], Error>) {
         do {
-            guard let folder = try result.get().first else { return }
-            let scoped = folder.startAccessingSecurityScopedResource()
-            defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+            let files = try result.get()
+            guard !files.isEmpty else { return }
 
-            let files = try FileManager.default.contentsOfDirectory(
-                at: folder,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            )
+            var updated = theme
+            var imported = 0
+            var skipped: [String] = []
 
-            var loaded: [String: Data] = [:]
-            for file in files where file.pathExtension.lowercased() == "png" {
-                let id = file.deletingPathExtension().lastPathComponent
-                guard Self.validBundleID(id) else { continue }
+            for file in files {
+                let scoped = file.startAccessingSecurityScopedResource()
+                defer { if scoped { file.stopAccessingSecurityScopedResource() } }
+
+                guard file.pathExtension.lowercased() == "png" else {
+                    skipped.append(file.lastPathComponent)
+                    continue
+                }
+
+                let bundleID = file.deletingPathExtension().lastPathComponent
+                guard Self.validBundleID(bundleID) else {
+                    skipped.append(file.lastPathComponent + " — имя не похоже на bundle ID")
+                    continue
+                }
+
                 let data = try Data(contentsOf: file)
-                guard data.count <= 2_000_000, UIImage(data: data) != nil else { continue }
-                loaded[id] = data
+                guard data.count <= 2_000_000,
+                      let image = UIImage(data: data),
+                      image.size.width >= 32,
+                      image.size.height >= 32 else {
+                    skipped.append(file.lastPathComponent + " — PNG не читается")
+                    continue
+                }
+
+                updated[bundleID] = data
+                imported += 1
             }
 
-            theme = loaded
+            theme = updated
             saveDraft()
-            log = "Импортировано \(loaded.count) иконок."
+
+            if skipped.isEmpty {
+                log = "Импортировано \(imported) иконок."
+            } else {
+                log = "Импортировано \(imported). Пропущено \(skipped.count):\n" + skipped.joined(separator: "\n")
+            }
         } catch {
             log = error.localizedDescription
         }
+    }
+
+    func remove(_ bundleID: String) {
+        theme.removeValue(forKey: bundleID)
+        saveDraft()
+        log = "Удалено из темы: \(bundleID)"
     }
 
     func apply() async {
