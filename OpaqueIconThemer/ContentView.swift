@@ -311,7 +311,7 @@ private struct AppTintView: View {
                 }
 
                 if mode != .tint {
-                    Section("Градиент логотипа") {
+                    Section {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text("Начало градиента")
@@ -331,6 +331,8 @@ private struct AppTintView: View {
                             }
                             Slider(value: $gradientStrength, in: 0.0...0.45)
                         }
+                    } header: {
+                        Text("Градиент логотипа")
                     } footer: {
                         Text("До выбранной точки логотип остаётся белым. Ниже плавно появляется выбранный цвет. В режиме «Авто» эти параметры применяются только если иконка распознана как простой логотип.")
                     }
