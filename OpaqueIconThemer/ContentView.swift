@@ -66,26 +66,64 @@ private struct AppsBrowserView: View {
     var body: some View {
         NavigationStack {
             List {
-                if store.scanning {
-                    HStack {
-                        ProgressView()
-                        Text("Сканирую приложения…")
+                if store.scanning && store.apps.isEmpty {
+                    Section {
+                        HStack {
+                            ProgressView()
+                            Text("Сканирую приложения…")
+                        }
+                    } footer: {
+                        Text("Поиск по полному bundle ID уже работает во время сканирования.")
                     }
-                } else if store.apps.isEmpty {
+                }
+
+                if store.apps.isEmpty {
                     Section {
                         EmptyStateView(
-                            title: "Список не получен",
-                            symbol: "apps.iphone",
+                            title: store.isBundleIDSearch ? "Ищу bundle ID" : "Список не получен",
+                            symbol: store.isBundleIDSearch ? "magnifyingglass" : "apps.iphone",
                             message: store.status.isEmpty ? "Нажми «Сканировать снова»." : store.status
                         )
+
+                        if store.isBundleIDSearch {
+                            Button {
+                                store.lookupSearchNow()
+                            } label: {
+                                Label("Найти сейчас", systemImage: "arrow.right.circle.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    } footer: {
+                        if !store.isBundleIDSearch {
+                            Text("Если массовый список закрыт iOS, введи полный bundle ID — например com.apple.Preferences.")
+                        }
                     }
                 } else {
                     Section {
-                        ForEach(store.filteredApps) { app in
-                            NavigationLink {
-                                AppTintView(app: app)
-                            } label: {
-                                AppRow(app: app)
+                        if store.filteredApps.isEmpty {
+                            VStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.title2)
+                                    .foregroundStyle(.secondary)
+                                Text("Совпадений пока нет")
+                                    .font(.headline)
+                                if store.isBundleIDSearch {
+                                    Button("Проверить этот bundle ID") {
+                                        store.lookupSearchNow()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                        } else {
+                            ForEach(store.filteredApps) { app in
+                                NavigationLink {
+                                    AppTintView(app: app)
+                                } label: {
+                                    AppRow(app: app)
+                                }
                             }
                         }
                     } header: {
@@ -97,6 +135,9 @@ private struct AppsBrowserView: View {
             }
             .navigationTitle("Приложения")
             .searchable(text: $store.search, prompt: "Название или bundle ID")
+            .onSubmit(of: .search) {
+                store.lookupSearchNow()
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
