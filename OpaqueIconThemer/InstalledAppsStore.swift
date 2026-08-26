@@ -1,11 +1,14 @@
 import Foundation
 import UIKit
+import SwiftUI
 import FamilyControls
+import ManagedSettings
 
 struct InstalledAppInfo: Identifiable, Hashable {
     let bundleIdentifier: String
     let displayName: String
     let icon: UIImage?
+    let applicationToken: ApplicationToken?
 
     var id: String { bundleIdentifier }
 
@@ -67,29 +70,35 @@ final class InstalledAppsStore: ObservableObject {
 
                     let auth = AuthorizationCenter.shared.authorizationStatus
                     if auth == .approvedWithDataAccess {
-                        status = "Читаю список через разрешение «Использование приложений»…"
+                        status = "Читаю приложения через разрешение «Использование приложений»…"
                         let installed = try await FamilyActivityData.shared.installedApplications
 
                         var bundleIDs: [String] = []
                         var seen = Set<String>()
+
                         for application in installed {
                             guard let bundleID = application.bundleIdentifier,
                                   Self.looksLikeBundleIdentifier(bundleID) else { continue }
+
                             let key = bundleID.lowercased()
                             guard seen.insert(key).inserted else { continue }
                             bundleIDs.append(bundleID)
+
+                            // No App Store filter here. Keep every app Screen Time reports,
+                            // including sideloaded/development/custom apps.
+                            let token = application.token
+                            let tokenIcon = token.flatMap { Self.renderTokenIcon($0) }
+
+                            merge(InstalledAppInfo(
+                                bundleIdentifier: bundleID,
+                                displayName: bundleID,
+                                icon: tokenIcon,
+                                applicationToken: token
+                            ))
                         }
 
                         familyCount = bundleIDs.count
                         familyStatus = "Screen Time:\(familyCount)"
-
-                        for bundleID in bundleIDs {
-                            merge(InstalledAppInfo(
-                                bundleIdentifier: bundleID,
-                                displayName: bundleID,
-                                icon: nil
-                            ))
-                        }
 
                         if !bundleIDs.isEmpty {
                             enrichFamilyApps(bundleIDs)
@@ -105,7 +114,7 @@ final class InstalledAppsStore: ObservableObject {
             }
 
             status = familyCount > 0
-                ? "Получено по разрешению: \(familyCount). Дополняю названия и иконки…"
+                ? "Получено по разрешению: \(familyCount). Включая кастомные/sideloaded, если их видит Screen Time."
                 : "\(familyStatus). Проверяю запасные способы…"
 
             runNativeScanOffMainThread(familyStatus: familyStatus)
@@ -130,7 +139,8 @@ final class InstalledAppsStore: ObservableObject {
                 enriched.append(InstalledAppInfo(
                     bundleIdentifier: raw.bundleIdentifier,
                     displayName: raw.displayName,
-                    icon: raw.icon
+                    icon: raw.icon,
+                    applicationToken: nil
                 ))
             }
 
@@ -156,7 +166,8 @@ final class InstalledAppsStore: ObservableObject {
                 let candidate = InstalledAppInfo(
                     bundleIdentifier: raw.bundleIdentifier,
                     displayName: raw.displayName,
-                    icon: raw.icon
+                    icon: raw.icon,
+                    applicationToken: nil
                 )
 
                 if let existing = merged[candidate.bundleIdentifier] {
@@ -165,7 +176,8 @@ final class InstalledAppsStore: ObservableObject {
                     merged[candidate.bundleIdentifier] = InstalledAppInfo(
                         bundleIdentifier: candidate.bundleIdentifier,
                         displayName: (!existingHasUsefulName && candidateHasUsefulName) ? candidate.displayName : existing.displayName,
-                        icon: existing.icon ?? candidate.icon
+                        icon: existing.icon ?? candidate.icon,
+                        applicationToken: existing.applicationToken ?? candidate.applicationToken
                     )
                 } else {
                     merged[candidate.bundleIdentifier] = candidate
@@ -235,7 +247,8 @@ final class InstalledAppsStore: ObservableObject {
                 let item = InstalledAppInfo(
                     bundleIdentifier: raw.bundleIdentifier,
                     displayName: raw.displayName,
-                    icon: raw.icon
+                    icon: raw.icon,
+                    applicationToken: nil
                 )
                 self.merge(item)
                 self.status = "Найдено напрямую: \(item.bundleIdentifier)"
@@ -253,7 +266,8 @@ final class InstalledAppsStore: ObservableObject {
             apps[index] = InstalledAppInfo(
                 bundleIdentifier: existing.bundleIdentifier,
                 displayName: (!existingHasUsefulName && candidateHasUsefulName) ? candidate.displayName : existing.displayName,
-                icon: existing.icon ?? candidate.icon
+                icon: existing.icon ?? candidate.icon,
+                applicationToken: existing.applicationToken ?? candidate.applicationToken
             )
         } else {
             apps.append(candidate)
@@ -262,6 +276,16 @@ final class InstalledAppsStore: ObservableObject {
         apps.sort {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
+    }
+
+    @MainActor
+    private static func renderTokenIcon(_ token: ApplicationToken) -> UIImage? {
+        let view = Label(token)
+            .labelStyle(.iconOnly)
+            .frame(width: 128, height: 128)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = UIScreen.main.scale
+        return renderer.uiImage
     }
 
     private static func looksLikeBundleIdentifier(_ value: String) -> Bool {
