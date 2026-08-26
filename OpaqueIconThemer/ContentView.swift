@@ -219,15 +219,6 @@ private struct AppTintView: View {
     @State private var gradientStrength = 0.16
     @StateObject private var shortcutHelper = ShortcutHelper()
 
-    private var renderOptions: IconRenderOptions {
-        IconRenderOptions(
-            mode: mode,
-            tintIntensity: tintIntensity,
-            gradientStart: gradientStart,
-            gradientStrength: gradientStrength
-        )
-    }
-
     private var resolvedMode: IconRenderMode? {
         guard let source = app.icon else { return nil }
         return IconStyleRenderer.shared.resolvedMode(source: source, requested: mode)
@@ -235,41 +226,33 @@ private struct AppTintView: View {
 
     private var tintedIcon: UIImage? {
         guard let source = app.icon else { return nil }
+        let renderer = ReferenceAppleMonotoneRenderer.shared
+        let uiTint = UIColor(tintColor)
 
         if resolvedMode == .smartLogo {
-            return AppleLikeLogoRenderer.shared.render(
+            return renderer.renderSmartLogo(
                 source: source,
-                tint: UIColor(tintColor),
+                tint: uiTint,
                 gradientStart: gradientStart,
                 gradientStrength: gradientStrength
-            ) ?? IconStyleRenderer.shared.render(
+            ) ?? renderer.renderTintedBitmap(
                 source: source,
-                tint: UIColor(tintColor),
-                options: IconRenderOptions(
-                    mode: .tint,
-                    tintIntensity: tintIntensity,
-                    gradientStart: gradientStart,
-                    gradientStrength: gradientStrength
-                )
+                tint: uiTint,
+                intensity: tintIntensity
             )
         }
 
-        return IconStyleRenderer.shared.render(
+        return renderer.renderTintedBitmap(
             source: source,
-            tint: UIColor(tintColor),
-            options: IconRenderOptions(
-                mode: .tint,
-                tintIntensity: tintIntensity,
-                gradientStart: gradientStart,
-                gradientStrength: gradientStrength
-            )
+            tint: uiTint,
+            intensity: tintIntensity
         )
     }
 
     private var resultTitle: String {
         switch resolvedMode {
-        case .smartLogo: return "Логотип"
-        case .tint: return "Тинт"
+        case .smartLogo: return "Apple Mono"
+        case .tint: return "Apple Tint"
         default: return "Результат"
         }
     }
@@ -306,7 +289,7 @@ private struct AppTintView: View {
                             Text("Авто выбрало")
                             Spacer()
                             Label(
-                                resolvedMode == .smartLogo ? "Умный логотип" : "Обычный тинт",
+                                resolvedMode == .smartLogo ? "Apple Mono" : "Apple Tint",
                                 systemImage: resolvedMode == .smartLogo ? "wand.and.stars" : "paintbrush.fill"
                             )
                             .foregroundStyle(.secondary)
@@ -358,7 +341,7 @@ private struct AppTintView: View {
                     } header: {
                         Text("Градиент логотипа")
                     } footer: {
-                        Text("До выбранной точки логотип остаётся белым. Ниже плавно появляется выбранный цвет. В режиме «Авто» эти параметры применяются только если иконка распознана как простой логотип.")
+                        Text("Mono-форма считается в linear-light: верх остаётся белым, ниже выбранной точки мягко добавляется выбранный цвет. Полупрозрачность и антиалиасинг деталей сохраняются в композите, но итоговая PNG полностью непрозрачная.")
                     }
                 }
 
@@ -417,11 +400,11 @@ private struct AppTintView: View {
     private var modeDescription: String {
         switch mode {
         case .auto:
-            return "Авто анализирует детализацию и цвета: простые иконки делает белым логотипом с градиентом, сложные и игровые — обычным тинтом."
+            return "Авто оставляет простые логотипные иконки в Apple Mono-пайплайне, а сложные и игровые переводит в Apple Tint по всей картинке."
         case .smartLogo:
-            return "Выделяет главный логотип, сохраняет полупрозрачность, антиалиасинг и мягкие детали знака. Итоговый фон всегда полностью непрозрачный. Если маска не получается, используется безопасный тинт."
+            return "Сегментирует главный знак мягкой маской, сохраняет alpha/антиалиасинг и тональный объём, считает luminance в linear-light sRGB и делает фон полностью непрозрачным."
         case .tint:
-            return "Не распознаёт форму и применяет обычный однотонный тинт ко всей иконке. Лучше для игр и очень детализированных изображений."
+            return "Для игр и детализированных иконок: без вырезания формы, вся картинка переводится в linear-light двухточечный tint с сохранением светотеневой структуры."
         }
     }
 
