@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+if command -v sbreload >/dev/null 2>&1; then
+  sbreload || true
+elif command -v killall >/dev/null 2>&1; then
+  killall -9 SpringBoard || true
+fi
+
+exit 0
