@@ -26,10 +26,10 @@ struct ContentView: View {
                     Button {
                         importing = true
                     } label: {
-                        Label("Выбрать PNG", systemImage: "photo.badge.plus")
+                        Label("Выбрать файлы иконок", systemImage: "photo.badge.plus")
                     }
 
-                    Text("Имя файла должно быть bundle ID приложения, например com.apple.Preferences.png")
+                    Text("Пикер разрешает любые файлы, чтобы Chrome/Files не блокировали PNG по неверному UTType. После выбора приложение само проверит PNG и bundle ID.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -109,7 +109,7 @@ struct ContentView: View {
         }
         .fileImporter(
             isPresented: $importing,
-            allowedContentTypes: [.png],
+            allowedContentTypes: [.item],
             allowsMultipleSelection: true
         ) { result in
             store.importFiles(result)
