@@ -1,0 +1,52 @@
+name: Build Tint Utility Fast
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: tint-utility-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build manager
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project OpaqueIconThemer.xcodeproj \
+            -scheme OpaqueIconThemer \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Pack IPA
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP"
+          zip -qry OpaqueIconThemer-Tint.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpaqueIconThemer-Tint-IPA
+          path: ${{ runner.temp }}/OpaqueIconThemer-Tint.ipa
