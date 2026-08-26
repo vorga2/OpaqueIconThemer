@@ -73,10 +73,10 @@ private struct AppsBrowserView: View {
                     }
                 } else if store.apps.isEmpty {
                     Section {
-                        ContentUnavailableView(
-                            "Список не получен",
-                            systemImage: "apps.iphone",
-                            description: Text(store.status.isEmpty ? "Нажми «Сканировать снова»." : store.status)
+                        EmptyStateView(
+                            title: "Список не получен",
+                            symbol: "apps.iphone",
+                            message: store.status.isEmpty ? "Нажми «Сканировать снова»." : store.status
                         )
                     }
                 } else {
@@ -98,7 +98,7 @@ private struct AppsBrowserView: View {
             .navigationTitle("Приложения")
             .searchable(text: $store.search, prompt: "Название или bundle ID")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button {
                             store.scan()
@@ -234,10 +234,10 @@ private struct AppTintView: View {
                 }
             } else {
                 Section {
-                    ContentUnavailableView(
-                        "Иконка недоступна",
-                        systemImage: "photo.badge.exclamationmark",
-                        description: Text("iOS отдала приложение, но не разрешила прочитать его иконку. Для него ничего подставлять не будем.")
+                    EmptyStateView(
+                        title: "Иконка недоступна",
+                        symbol: "photo.badge.exclamationmark",
+                        message: "iOS отдала приложение, но не разрешила прочитать его иконку. Для него ничего подставлять не будем."
                     )
                 }
             }
@@ -265,5 +265,27 @@ private struct AppTintView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+private struct EmptyStateView: View {
+    let title: String
+    let symbol: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.headline)
+            Text(message)
+                .font(.caption)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
     }
 }
