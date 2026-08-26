@@ -49,6 +49,12 @@ static NSString *OITStringValue(id object, NSArray<NSString *> *selectorNames) {
     return nil;
 }
 
+static NSArray *OITArrayFromUnknownCollection(id value) {
+    if ([value isKindOfClass:NSArray.class]) return value;
+    if ([value respondsToSelector:@selector(allObjects)]) return [value allObjects];
+    return nil;
+}
+
 static UIImage *OITIconForProxy(id proxy, NSString *bundleID) {
     NSArray<NSNumber *> *variants = @[@2, @1, @0, @6, @10];
 
@@ -107,13 +113,15 @@ static UIImage *OITIconForProxy(id proxy, NSString *bundleID) {
     }
 
     NSArray *rawApps = nil;
-    SEL allApplicationsSel = NSSelectorFromString(@"allApplications");
-    if ([workspace respondsToSelector:allApplicationsSel]) {
-        id result = OITSendId(workspace, allApplicationsSel);
-        if ([result isKindOfClass:NSArray.class]) {
-            rawApps = result;
-        } else if ([result respondsToSelector:@selector(allObjects)]) {
-            rawApps = [result allObjects];
+    NSString *usedSelector = nil;
+    for (NSString *selectorName in @[@"allInstalledApplications", @"allApplications", @"installedApplications"]) {
+        SEL sel = NSSelectorFromString(selectorName);
+        if (![workspace respondsToSelector:sel]) continue;
+        NSArray *candidate = OITArrayFromUnknownCollection(OITSendId(workspace, sel));
+        if (candidate.count > 0) {
+            rawApps = candidate;
+            usedSelector = selectorName;
+            break;
         }
     }
 
@@ -141,7 +149,9 @@ static UIImage *OITIconForProxy(id proxy, NSString *bundleID) {
         return [a.displayName localizedCaseInsensitiveCompare:b.displayName];
     }];
 
-    gOITScanStatus = [NSString stringWithFormat:@"Найдено приложений: %lu", (unsigned long)sorted.count];
+    gOITScanStatus = [NSString stringWithFormat:@"Найдено: %lu · %@",
+                      (unsigned long)sorted.count,
+                      usedSelector ?: @"workspace"];
     return sorted;
 }
 
