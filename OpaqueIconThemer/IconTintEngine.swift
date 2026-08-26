@@ -14,9 +14,9 @@ final class IconTintEngine {
         format.opaque = true
         format.scale = 1
 
-        let normalized = UIGraphicsImageRenderer(size: size, format: format).image { context in
-            tint.setFill()
-            context.fill(CGRect(origin: .zero, size: size))
+        let normalized = UIGraphicsImageRenderer(size: size, format: format).image { rendererContext in
+            rendererContext.cgContext.setFillColor(tint.cgColor)
+            rendererContext.cgContext.fill(CGRect(origin: .zero, size: size))
 
             let sourceSize = source.size
             guard sourceSize.width > 0, sourceSize.height > 0 else { return }
@@ -36,9 +36,9 @@ final class IconTintEngine {
               let cgImage = context.createCGImage(output, from: output.extent) else { return nil }
 
         let result = UIImage(cgImage: cgImage)
-        return UIGraphicsImageRenderer(size: size, format: format).image { context in
-            tint.setFill()
-            context.fill(CGRect(origin: .zero, size: size))
+        return UIGraphicsImageRenderer(size: size, format: format).image { rendererContext in
+            rendererContext.cgContext.setFillColor(tint.cgColor)
+            rendererContext.cgContext.fill(CGRect(origin: .zero, size: size))
             result.draw(in: CGRect(origin: .zero, size: size))
         }
     }
