@@ -22,9 +22,14 @@
 static NSString *gOITScanStatus = @"Не запускалось";
 
 typedef void (^OITApplicationBlock)(id proxy);
+typedef id (*OITMobileInstallationLookupFn)(id options, id callback);
 
 static id OITSendId(id target, SEL selector) {
     return ((id (*)(id, SEL))objc_msgSend)(target, selector);
+}
+
+static id OITSendIdObject(id target, SEL selector, id object) {
+    return ((id (*)(id, SEL, id))objc_msgSend)(target, selector, object);
 }
 
 static id OITSendIdInteger(id target, SEL selector, NSInteger value) {
@@ -47,6 +52,15 @@ static void OITSendEnumerateLegacy(id target, SEL selector, NSUInteger type, BOO
     ((void (*)(id, SEL, NSUInteger, BOOL, id))objc_msgSend)(target, selector, type, legacy, block);
 }
 
+static BOOL OITLooksLikeBundleIdentifier(NSString *value) {
+    if (![value isKindOfClass:NSString.class]) return NO;
+    NSString *trimmed = [value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return trimmed.length >= 3 &&
+           [trimmed containsString:@"."] &&
+           ![trimmed containsString:@"/"] &&
+           ![trimmed containsString:@" "];
+}
+
 static NSString *OITStringValue(id object, NSArray<NSString *> *selectorNames) {
     for (NSString *name in selectorNames) {
         SEL sel = NSSelectorFromString(name);
@@ -64,6 +78,7 @@ static NSString *OITStringValue(id object, NSArray<NSString *> *selectorNames) {
 
 static NSArray *OITArrayFromUnknownCollection(id value) {
     if ([value isKindOfClass:NSArray.class]) return value;
+    if ([value isKindOfClass:NSSet.class]) return [value allObjects];
     if ([value respondsToSelector:@selector(allObjects)]) {
         @try { return [value allObjects]; } @catch (__unused NSException *exception) {}
     }
@@ -73,6 +88,50 @@ static NSArray *OITArrayFromUnknownCollection(id value) {
 static void OITAppendObjects(NSMutableArray *destination, id value) {
     NSArray *array = OITArrayFromUnknownCollection(value);
     if (array.count > 0) [destination addObjectsFromArray:array];
+}
+
+static void OITLoadLaunchServices(void) {
+    dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY | RTLD_LOCAL);
+    dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY | RTLD_LOCAL);
+    dlopen("/System/Library/PrivateFrameworks/CoreServicesStore.framework/CoreServicesStore", RTLD_LAZY | RTLD_LOCAL);
+}
+
+static Class OITLoadLaunchServicesClass(NSString *name) {
+    Class cls = NSClassFromString(name);
+    if (cls) return cls;
+    OITLoadLaunchServices();
+    return NSClassFromString(name);
+}
+
+static id OITProxyForBundleIdentifier(NSString *bundleID) {
+    if (!OITLooksLikeBundleIdentifier(bundleID)) return nil;
+
+    Class proxyClass = OITLoadLaunchServicesClass(@"LSApplicationProxy");
+    if (!proxyClass) return nil;
+
+    SEL oneArg = NSSelectorFromString(@"applicationProxyForIdentifier:");
+    if ([proxyClass respondsToSelector:oneArg]) {
+        @try {
+            id proxy = OITSendIdObject(proxyClass, oneArg, bundleID);
+            if (proxy) {
+                NSString *resolved = OITStringValue(proxy, @[@"bundleIdentifier", @"applicationIdentifier"]);
+                if (resolved.length > 0) return proxy;
+            }
+        } @catch (__unused NSException *exception) {}
+    }
+
+    SEL twoArg = NSSelectorFromString(@"applicationProxyForIdentifier:placeholder:");
+    if ([proxyClass respondsToSelector:twoArg]) {
+        @try {
+            id proxy = ((id (*)(id, SEL, id, BOOL))objc_msgSend)(proxyClass, twoArg, bundleID, NO);
+            if (proxy) {
+                NSString *resolved = OITStringValue(proxy, @[@"bundleIdentifier", @"applicationIdentifier"]);
+                if (resolved.length > 0) return proxy;
+            }
+        } @catch (__unused NSException *exception) {}
+    }
+
+    return nil;
 }
 
 static UIImage *OITIconForProxy(id proxy, NSString *bundleID) {
@@ -119,52 +178,49 @@ static UIImage *OITIconForProxy(id proxy, NSString *bundleID) {
     return nil;
 }
 
-static Class OITLoadLaunchServicesClass(NSString *name) {
-    Class cls = NSClassFromString(name);
-    if (cls) return cls;
-
-    dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY | RTLD_LOCAL);
-    cls = NSClassFromString(name);
-    if (cls) return cls;
-
-    dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY | RTLD_LOCAL);
-    return NSClassFromString(name);
-}
-
 static NSUInteger OITCollectUsingLSEnumerator(NSMutableArray *rawApps) {
     Class enumeratorClass = OITLoadLaunchServicesClass(@"LSEnumerator");
-    SEL makeSel = NSSelectorFromString(@"enumeratorForApplicationProxiesWithOptions:");
-    if (!enumeratorClass || ![enumeratorClass respondsToSelector:makeSel]) return 0;
+    if (!enumeratorClass) return 0;
 
     NSUInteger before = rawApps.count;
-    for (NSNumber *options in @[@0, @1]) {
-        @try {
-            id enumerator = OITSendIdInteger(enumeratorClass, makeSel, options.integerValue);
-            if (!enumerator) continue;
-            for (NSUInteger guard = 0; guard < 4096; guard++) {
-                id object = [enumerator nextObject];
-                if (!object) break;
-                [rawApps addObject:object];
-            }
-            if (rawApps.count > before) break;
-        } @catch (__unused NSException *exception) {
+    for (NSString *selectorName in @[@"enumeratorForApplicationProxiesWithOptions:",
+                                      @"enumeratorForApplicationRecordsWithOptions:"]) {
+        SEL makeSel = NSSelectorFromString(selectorName);
+        if (![enumeratorClass respondsToSelector:makeSel]) continue;
+
+        for (NSNumber *options in @[@0, @1]) {
+            @try {
+                id enumerator = OITSendIdInteger(enumeratorClass, makeSel, options.integerValue);
+                if (!enumerator) continue;
+
+                if ([enumerator respondsToSelector:@selector(allObjects)]) {
+                    NSArray *objects = [enumerator allObjects];
+                    if (objects.count > 0) [rawApps addObjectsFromArray:objects];
+                } else {
+                    for (NSUInteger guard = 0; guard < 4096; guard++) {
+                        id object = [enumerator nextObject];
+                        if (!object) break;
+                        [rawApps addObject:object];
+                    }
+                }
+
+                if (rawApps.count > before) return rawApps.count - before;
+            } @catch (__unused NSException *exception) {}
         }
     }
+
     return rawApps.count - before;
 }
 
 static NSUInteger OITCollectUsingWorkspaceEnumerators(id workspace, NSMutableArray *rawApps) {
     NSUInteger before = rawApps.count;
-    NSMutableSet<NSString *> *attempted = [NSMutableSet set];
-
     OITApplicationBlock appendBlock = ^(id proxy) {
         if (proxy) [rawApps addObject:proxy];
     };
 
     SEL appEnumSel = NSSelectorFromString(@"enumerateApplicationsOfType:block:");
     if ([workspace respondsToSelector:appEnumSel]) {
-        [attempted addObject:@"enumerateApplicationsOfType:block:"];
-        for (NSUInteger type = 0; type <= 1; type++) {
+        for (NSUInteger type = 0; type <= 2; type++) {
             @try { OITSendEnumerate(workspace, appEnumSel, type, appendBlock); }
             @catch (__unused NSException *exception) {}
         }
@@ -173,8 +229,7 @@ static NSUInteger OITCollectUsingWorkspaceEnumerators(id workspace, NSMutableArr
     if (rawApps.count == before) {
         SEL appLegacySel = NSSelectorFromString(@"enumerateApplicationsOfType:legacySPI:block:");
         if ([workspace respondsToSelector:appLegacySel]) {
-            [attempted addObject:@"enumerateApplicationsOfType:legacySPI:block:"];
-            for (NSUInteger type = 0; type <= 1; type++) {
+            for (NSUInteger type = 0; type <= 2; type++) {
                 @try { OITSendEnumerateLegacy(workspace, appLegacySel, type, YES, appendBlock); }
                 @catch (__unused NSException *exception) {}
             }
@@ -184,8 +239,7 @@ static NSUInteger OITCollectUsingWorkspaceEnumerators(id workspace, NSMutableArr
     if (rawApps.count == before) {
         SEL bundleEnumSel = NSSelectorFromString(@"enumerateBundlesOfType:block:");
         if ([workspace respondsToSelector:bundleEnumSel]) {
-            [attempted addObject:@"enumerateBundlesOfType:block:"];
-            for (NSUInteger type = 0; type <= 1; type++) {
+            for (NSUInteger type = 0; type <= 2; type++) {
                 @try { OITSendEnumerate(workspace, bundleEnumSel, type, appendBlock); }
                 @catch (__unused NSException *exception) {}
             }
@@ -212,14 +266,13 @@ static NSUInteger OITCollectUsingWorkspaceArrays(id workspace, NSMutableArray *r
                 if (usedSelector) *usedSelector = selectorName;
                 break;
             }
-        } @catch (__unused NSException *exception) {
-        }
+        } @catch (__unused NSException *exception) {}
     }
 
     if (rawApps.count == before) {
         SEL typeSel = NSSelectorFromString(@"applicationsOfType:");
         if ([workspace respondsToSelector:typeSel]) {
-            for (NSUInteger type = 0; type <= 1; type++) {
+            for (NSUInteger type = 0; type <= 2; type++) {
                 @try { OITAppendObjects(rawApps, OITSendIdInteger(workspace, typeSel, type)); }
                 @catch (__unused NSException *exception) {}
             }
@@ -230,14 +283,154 @@ static NSUInteger OITCollectUsingWorkspaceArrays(id workspace, NSMutableArray *r
     return rawApps.count - before;
 }
 
+static NSString *OITBundleIDFromDictionary(NSDictionary *dictionary) {
+    for (NSString *key in @[@"__OITBundleID",
+                             @"CFBundleIdentifier",
+                             @"BundleIdentifier",
+                             @"bundleIdentifier",
+                             @"ApplicationIdentifier",
+                             @"applicationIdentifier"]) {
+        id value = dictionary[key];
+        if ([value isKindOfClass:NSString.class] && OITLooksLikeBundleIdentifier(value)) return value;
+    }
+    return nil;
+}
+
+static NSString *OITNameFromDictionary(NSDictionary *dictionary) {
+    for (NSString *key in @[@"CFBundleDisplayName",
+                             @"CFBundleName",
+                             @"DisplayName",
+                             @"LocalizedName",
+                             @"Name",
+                             @"name"]) {
+        id value = dictionary[key];
+        if ([value isKindOfClass:NSString.class] && [value length] > 0) return value;
+    }
+    return nil;
+}
+
+static void OITAppendMobileInstallationObject(NSMutableArray *rawApps, id object, NSString *keyHint, NSUInteger depth) {
+    if (!object || depth > 5) return;
+
+    if ([object isKindOfClass:NSDictionary.class]) {
+        NSDictionary *dictionary = object;
+        NSString *bundleID = OITBundleIDFromDictionary(dictionary);
+        if (!bundleID && OITLooksLikeBundleIdentifier(keyHint)) bundleID = keyHint;
+
+        if (bundleID) {
+            NSMutableDictionary *descriptor = [dictionary mutableCopy];
+            descriptor[@"__OITBundleID"] = bundleID;
+            [rawApps addObject:descriptor];
+            return;
+        }
+
+        [dictionary enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL *stop) {
+            NSString *nextHint = [key isKindOfClass:NSString.class] ? key : nil;
+            OITAppendMobileInstallationObject(rawApps, value, nextHint, depth + 1);
+        }];
+        return;
+    }
+
+    if ([object isKindOfClass:NSArray.class] || [object isKindOfClass:NSSet.class]) {
+        for (id value in object) OITAppendMobileInstallationObject(rawApps, value, nil, depth + 1);
+        return;
+    }
+
+    if ([object isKindOfClass:NSString.class] && OITLooksLikeBundleIdentifier(object)) {
+        [rawApps addObject:object];
+    }
+}
+
+static NSUInteger OITCollectUsingMobileInstallation(NSMutableArray *rawApps) {
+    void *handle = dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_LAZY | RTLD_LOCAL);
+    if (!handle) return 0;
+
+    OITMobileInstallationLookupFn lookup = (OITMobileInstallationLookupFn)dlsym(handle, "MobileInstallationLookup");
+    if (!lookup) return 0;
+
+    NSUInteger before = rawApps.count;
+    for (NSDictionary *options in @[@{@"ApplicationType": @"Any"},
+                                     @{@"ApplicationType": @"User"},
+                                     @{@"ApplicationType": @"System"},
+                                     @{}]) {
+        @try {
+            id result = lookup(options, nil);
+            OITAppendMobileInstallationObject(rawApps, result, nil, 0);
+        } @catch (__unused NSException *exception) {}
+        if (rawApps.count > before) break;
+    }
+
+    return rawApps.count - before;
+}
+
+static NSUInteger OITCollectUsingReadableAppDirectories(NSMutableArray *rawApps) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSArray<NSString *> *roots = @[@"/Applications",
+                                    @"/System/Applications",
+                                    @"/private/var/containers/Bundle/Application",
+                                    @"/var/containers/Bundle/Application"];
+    NSUInteger before = rawApps.count;
+
+    for (NSString *root in roots) {
+        BOOL isDirectory = NO;
+        if (![fm fileExistsAtPath:root isDirectory:&isDirectory] || !isDirectory) continue;
+
+        NSURL *rootURL = [NSURL fileURLWithPath:root isDirectory:YES];
+        NSDirectoryEnumerator<NSURL *> *enumerator =
+            [fm enumeratorAtURL:rootURL
+     includingPropertiesForKeys:@[NSURLIsDirectoryKey]
+                        options:NSDirectoryEnumerationSkipsHiddenFiles
+                   errorHandler:^BOOL(NSURL *url, NSError *error) { return YES; }];
+
+        for (NSURL *url in enumerator) {
+            if (![url.pathExtension.lowercaseString isEqualToString:@"app"]) continue;
+
+            NSDictionary *info = [NSDictionary dictionaryWithContentsOfURL:[url URLByAppendingPathComponent:@"Info.plist"]];
+            NSString *bundleID = OITBundleIDFromDictionary(info ?: @{});
+            if (bundleID.length > 0) {
+                NSMutableDictionary *descriptor = info ? [info mutableCopy] : [NSMutableDictionary dictionary];
+                descriptor[@"__OITBundleID"] = bundleID;
+                descriptor[@"__OITBundleURL"] = url.path ?: @"";
+                [rawApps addObject:descriptor];
+            }
+            [enumerator skipDescendants];
+        }
+    }
+
+    return rawApps.count - before;
+}
+
+static NSString *OITBundleIDForRawObject(id raw) {
+    if ([raw isKindOfClass:NSString.class]) return OITLooksLikeBundleIdentifier(raw) ? raw : nil;
+    if ([raw isKindOfClass:NSDictionary.class]) return OITBundleIDFromDictionary(raw);
+    return OITStringValue(raw, @[@"bundleIdentifier", @"applicationIdentifier"]);
+}
+
+static NSString *OITNameForRawObject(id raw) {
+    if ([raw isKindOfClass:NSDictionary.class]) return OITNameFromDictionary(raw);
+    if ([raw isKindOfClass:NSString.class]) return nil;
+    return OITStringValue(raw, @[@"localizedName", @"localizedShortName", @"itemName", @"name"]);
+}
+
+static OITInstalledApplication *OITBuildInstalledApplication(id raw) {
+    NSString *bundleID = OITBundleIDForRawObject(raw);
+    if (bundleID.length == 0) return nil;
+
+    id proxy = (![raw isKindOfClass:NSString.class] && ![raw isKindOfClass:NSDictionary.class]) ? raw : OITProxyForBundleIdentifier(bundleID);
+    NSString *name = OITStringValue(proxy, @[@"localizedName", @"localizedShortName", @"itemName", @"name"]);
+    if (name.length == 0) name = OITNameForRawObject(raw);
+    if (name.length == 0) name = bundleID;
+
+    UIImage *icon = OITIconForProxy(proxy, bundleID);
+    return [[OITInstalledApplication alloc] initWithBundleIdentifier:bundleID displayName:name icon:icon];
+}
+
 + (NSArray<OITInstalledApplication *> *)installedApplications {
     NSMutableArray *rawApps = [NSMutableArray array];
     NSMutableArray<NSString *> *methods = [NSMutableArray array];
 
-    NSUInteger enumCount = OITCollectUsingLSEnumerator(rawApps);
-    if (enumCount > 0) {
-        [methods addObject:[NSString stringWithFormat:@"LSEnumerator:%lu", (unsigned long)enumCount]];
-    }
+    NSUInteger lsEnumCount = OITCollectUsingLSEnumerator(rawApps);
+    [methods addObject:[NSString stringWithFormat:@"LSEnum:%lu", (unsigned long)lsEnumCount]];
 
     Class workspaceClass = OITLoadLaunchServicesClass(@"LSApplicationWorkspace");
     id workspace = nil;
@@ -249,57 +442,58 @@ static NSUInteger OITCollectUsingWorkspaceArrays(id workspace, NSMutableArray *r
         }
     }
 
+    NSUInteger workspaceEnumCount = 0;
+    NSUInteger arrayCount = 0;
+    NSString *arraySelector = nil;
     if (workspace) {
-        NSUInteger workspaceEnumCount = OITCollectUsingWorkspaceEnumerators(workspace, rawApps);
-        if (workspaceEnumCount > 0) {
-            [methods addObject:[NSString stringWithFormat:@"enumerate:%lu", (unsigned long)workspaceEnumCount]];
-        }
-
-        NSString *arraySelector = nil;
-        NSUInteger arrayCount = OITCollectUsingWorkspaceArrays(workspace, rawApps, &arraySelector);
-        if (arrayCount > 0) {
-            [methods addObject:[NSString stringWithFormat:@"%@:%lu", arraySelector ?: @"array", (unsigned long)arrayCount]];
-        }
+        workspaceEnumCount = OITCollectUsingWorkspaceEnumerators(workspace, rawApps);
+        arrayCount = OITCollectUsingWorkspaceArrays(workspace, rawApps, &arraySelector);
     }
+    [methods addObject:[NSString stringWithFormat:@"LSWorkspace:%lu/%lu", (unsigned long)workspaceEnumCount, (unsigned long)arrayCount]];
 
-    if (rawApps.count == 0) {
-        if (!workspaceClass && !OITLoadLaunchServicesClass(@"LSEnumerator")) {
-            gOITScanStatus = @"LaunchServices недоступен в этом процессе";
-        } else if (!workspace) {
-            gOITScanStatus = @"LaunchServices загружен, но workspace недоступен";
-        } else {
-            gOITScanStatus = @"LaunchServices доступен, но iOS не вернула ни одного приложения";
-        }
-        return @[];
-    }
+    NSUInteger miCount = OITCollectUsingMobileInstallation(rawApps);
+    [methods addObject:[NSString stringWithFormat:@"MI:%lu", (unsigned long)miCount]];
+
+    NSUInteger filesCount = OITCollectUsingReadableAppDirectories(rawApps);
+    [methods addObject:[NSString stringWithFormat:@"Files:%lu", (unsigned long)filesCount]];
 
     NSMutableDictionary<NSString *, OITInstalledApplication *> *unique = [NSMutableDictionary dictionary];
-
-    for (id proxy in rawApps) {
-        NSString *bundleID = OITStringValue(proxy, @[@"bundleIdentifier", @"applicationIdentifier"]);
-        if (bundleID.length == 0) continue;
-
-        NSString *name = OITStringValue(proxy, @[@"localizedName", @"localizedShortName", @"itemName", @"name"]);
-        if (name.length == 0) name = bundleID;
-
-        UIImage *icon = OITIconForProxy(proxy, bundleID);
-        OITInstalledApplication *existing = unique[bundleID];
-        if (!existing || (!existing.icon && icon)) {
-            unique[bundleID] = [[OITInstalledApplication alloc] initWithBundleIdentifier:bundleID
-                                                                            displayName:name
-                                                                                  icon:icon];
-        }
+    for (id raw in rawApps) {
+        OITInstalledApplication *app = OITBuildInstalledApplication(raw);
+        if (!app) continue;
+        OITInstalledApplication *existing = unique[app.bundleIdentifier];
+        if (!existing || (!existing.icon && app.icon)) unique[app.bundleIdentifier] = app;
     }
 
     NSArray *sorted = [unique.allValues sortedArrayUsingComparator:^NSComparisonResult(OITInstalledApplication *a, OITInstalledApplication *b) {
         return [a.displayName localizedCaseInsensitiveCompare:b.displayName];
     }];
 
-    NSString *methodText = methods.count > 0 ? [methods componentsJoinedByString:@" · "] : @"LaunchServices";
-    gOITScanStatus = [NSString stringWithFormat:@"Найдено: %lu · %@",
-                      (unsigned long)sorted.count,
-                      methodText];
+    NSString *methodText = [methods componentsJoinedByString:@" · "];
+    if (sorted.count == 0) {
+        gOITScanStatus = [NSString stringWithFormat:@"iOS закрыла массовый список для этого процесса · %@", methodText];
+        return @[];
+    }
+
+    gOITScanStatus = [NSString stringWithFormat:@"Найдено: %lu · %@", (unsigned long)sorted.count, methodText];
     return sorted;
+}
+
++ (nullable OITInstalledApplication *)installedApplicationForBundleIdentifier:(NSString *)bundleIdentifier {
+    NSString *bundleID = [bundleIdentifier stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!OITLooksLikeBundleIdentifier(bundleID)) return nil;
+
+    id proxy = OITProxyForBundleIdentifier(bundleID);
+    if (!proxy) return nil;
+
+    NSString *resolvedID = OITStringValue(proxy, @[@"bundleIdentifier", @"applicationIdentifier"]);
+    if (resolvedID.length == 0) return nil;
+
+    NSString *name = OITStringValue(proxy, @[@"localizedName", @"localizedShortName", @"itemName", @"name"]);
+    if (name.length == 0) name = resolvedID;
+
+    UIImage *icon = OITIconForProxy(proxy, resolvedID);
+    return [[OITInstalledApplication alloc] initWithBundleIdentifier:resolvedID displayName:name icon:icon];
 }
 
 + (NSString *)scanStatus {
