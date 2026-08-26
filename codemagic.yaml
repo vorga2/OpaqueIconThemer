@@ -4,13 +4,7 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 30
     triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: 'main'
-          include: true
-          source: true
-      cancel_previous_builds: true
+      events: []
     environment:
       xcode: latest
     scripts:
@@ -35,7 +29,7 @@ workflows:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build
-      - name: Pack unsigned IPA
+      - name: Pack unsigned IPA and ZIP
         script: |
           set -euo pipefail
           APP="$(find "$CM_BUILD_DIR/build/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -name '*.app' -print -quit)"
@@ -45,6 +39,9 @@ workflows:
           cp -R "$APP" "$CM_BUILD_DIR/build/Payload/"
           cd "$CM_BUILD_DIR/build"
           zip -qry OpaqueIconThemer.ipa Payload
-          ls -lh OpaqueIconThemer.ipa
+          rm -f OpaqueIconThemer-IPA.zip
+          zip -q OpaqueIconThemer-IPA.zip OpaqueIconThemer.ipa
+          ls -lh OpaqueIconThemer.ipa OpaqueIconThemer-IPA.zip
     artifacts:
+      - build/OpaqueIconThemer-IPA.zip
       - build/OpaqueIconThemer.ipa
