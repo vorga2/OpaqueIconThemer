@@ -38,22 +38,18 @@ final class InstalledAppsStore: ObservableObject {
         scanning = true
         status = "Сканирую локально…"
 
-        Task.detached(priority: .userInitiated) {
+        Task { @MainActor in
+            await Task.yield()
             let raw = OITPrivateAppScanner.installedApplications()
-            let mapped: [InstalledAppInfo] = raw.map {
+            apps = raw.map {
                 InstalledAppInfo(
                     bundleIdentifier: $0.bundleIdentifier,
                     displayName: $0.displayName,
                     icon: $0.icon
                 )
             }
-            let scannerStatus = OITPrivateAppScanner.scanStatus()
-
-            await MainActor.run {
-                self.apps = mapped
-                self.status = scannerStatus
-                self.scanning = false
-            }
+            status = OITPrivateAppScanner.scanStatus()
+            scanning = false
         }
     }
 }
