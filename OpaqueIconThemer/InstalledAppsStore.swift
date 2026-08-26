@@ -1,6 +1,6 @@
 import Foundation
 import UIKit
-import AppTrackingTransparency
+import FamilyControls
 
 struct InstalledAppInfo: Identifiable, Hashable {
     let bundleIdentifier: String
@@ -51,19 +51,64 @@ final class InstalledAppsStore: ObservableObject {
     func scan() {
         guard !scanning else { return }
         scanning = true
-        status = "Сканирую локально…"
+        status = "Запрашиваю доступ к использованию приложений…"
 
         Task { @MainActor [weak self] in
             guard let self else { return }
 
-            if ATTrackingManager.trackingAuthorizationStatus == .notDetermined {
-                status = "Жду системное разрешение…"
-                _ = await ATTrackingManager.requestTrackingAuthorization()
-                try? await Task.sleep(nanoseconds: 150_000_000)
+            var familyCount = 0
+            var familyStatus = "Screen Time API недоступен"
+
+            if #available(iOS 26.4, *) {
+                do {
+                    if AuthorizationCenter.shared.authorizationStatus == .notDetermined {
+                        try await AuthorizationCenter.shared.requestAuthorization(for: .individual)
+                    }
+
+                    let auth = AuthorizationCenter.shared.authorizationStatus
+                    if auth == .approvedWithDataAccess {
+                        status = "Читаю список через разрешение «Использование приложений»…"
+                        let installed = try await FamilyActivityData.shared.installedApplications
+
+                        var bundleIDs: [String] = []
+                        var seen = Set<String>()
+                        for application in installed {
+                            guard let bundleID = application.bundleIdentifier,
+                                  Self.looksLikeBundleIdentifier(bundleID) else { continue }
+                            let key = bundleID.lowercased()
+                            guard seen.insert(key).inserted else { continue }
+                            bundleIDs.append(bundleID)
+                        }
+
+                        familyCount = bundleIDs.count
+                        familyStatus = "Screen Time:\(familyCount)"
+
+                        for bundleID in bundleIDs {
+                            merge(InstalledAppInfo(
+                                bundleIdentifier: bundleID,
+                                displayName: bundleID,
+                                icon: nil
+                            ))
+                        }
+
+                        if !bundleIDs.isEmpty {
+                            enrichFamilyApps(bundleIDs)
+                        }
+                    } else {
+                        familyStatus = "Screen Time: \(String(describing: auth))"
+                    }
+                } catch {
+                    familyStatus = "Screen Time error: \(error.localizedDescription)"
+                }
+            } else {
+                familyStatus = "Screen Time list требует iOS 26.4+"
             }
 
-            status = "Проверяю все доступные источники внутри iPhone…"
-            runNativeScanOffMainThread()
+            status = familyCount > 0
+                ? "Получено по разрешению: \(familyCount). Дополняю названия и иконки…"
+                : "\(familyStatus). Проверяю запасные способы…"
+
+            runNativeScanOffMainThread(familyStatus: familyStatus)
         }
     }
 
@@ -77,7 +122,28 @@ final class InstalledAppsStore: ObservableObject {
         resolveBundleID(query)
     }
 
-    private func runNativeScanOffMainThread() {
+    private func enrichFamilyApps(_ bundleIDs: [String]) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var enriched: [InstalledAppInfo] = []
+            for bundleID in bundleIDs {
+                guard let raw = OITPrivateAppScanner.installedApplication(forBundleIdentifier: bundleID) else { continue }
+                enriched.append(InstalledAppInfo(
+                    bundleIdentifier: raw.bundleIdentifier,
+                    displayName: raw.displayName,
+                    icon: raw.icon
+                ))
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                for app in enriched {
+                    self.merge(app)
+                }
+            }
+        }
+    }
+
+    private func runNativeScanOffMainThread(familyStatus: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let primaryRaw = OITPrivateAppScanner.installedApplications()
             let primaryStatus = OITPrivateAppScanner.scanStatus()
@@ -118,13 +184,11 @@ final class InstalledAppsStore: ObservableObject {
                 }
 
                 if self.apps.isEmpty {
-                    self.status = "\(primaryStatus) · \(deepStatus)"
+                    self.status = "\(familyStatus) · \(primaryStatus) · \(deepStatus)"
                 } else {
-                    self.status = "Найдено: \(self.apps.count) · \(deepStatus)"
+                    self.status = "Найдено: \(self.apps.count) · \(familyStatus) · \(deepStatus)"
                 }
                 self.scanning = false
-
-                // Search may have changed while the slow native scan was running.
                 self.scheduleDirectBundleLookup()
             }
         }
@@ -137,7 +201,6 @@ final class InstalledAppsStore: ObservableObject {
         guard Self.looksLikeBundleIdentifier(query) else { return }
 
         directLookupTask = Task { @MainActor [weak self] in
-            // Short debounce: enough to avoid probing every keystroke, but feels instant.
             try? await Task.sleep(nanoseconds: 90_000_000)
             guard !Task.isCancelled, let self else { return }
             self.resolveBundleID(query)
@@ -148,6 +211,13 @@ final class InstalledAppsStore: ObservableObject {
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.looksLikeBundleIdentifier(normalized) else { return }
 
+        if apps.contains(where: {
+            $0.bundleIdentifier.caseInsensitiveCompare(normalized) == .orderedSame
+        }) {
+            status = "Найдено в списке: \(normalized)"
+            return
+        }
+
         status = "Ищу \(normalized)…"
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -155,12 +225,10 @@ final class InstalledAppsStore: ObservableObject {
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-
-                // Ignore an old lookup if the user has already typed another bundle ID.
                 guard self.trimmedSearch.caseInsensitiveCompare(normalized) == .orderedSame else { return }
 
                 guard let raw else {
-                    self.status = "Прямой lookup \(normalized) ничего не вернул — iOS фильтрует этот запрос"
+                    self.status = "\(normalized) не найден прямым lookup. Если разрешение Screen Time выдано, ищи его в полном списке."
                     return
                 }
 
