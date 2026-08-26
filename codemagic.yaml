@@ -35,7 +35,16 @@ workflows:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build
-      - name: Pack unsigned IPA and ZIP
+      - name: Embed requested entitlements
+        script: |
+          set -euo pipefail
+          APP="$(find "$CM_BUILD_DIR/build/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP"
+          codesign --force --sign - \
+            --entitlements "$CM_BUILD_DIR/OpaqueIconThemer/OpaqueIconThemer.entitlements" \
+            "$APP"
+          codesign -d --entitlements :- "$APP" || true
+      - name: Pack IPA and ZIP
         script: |
           set -euo pipefail
           APP="$(find "$CM_BUILD_DIR/build/DerivedData/Build/Products/Release-iphoneos" -maxdepth 1 -name '*.app' -print -quit)"
