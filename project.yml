@@ -17,5 +17,7 @@ targets:
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGN_IDENTITY: ""
         GENERATE_INFOPLIST_FILE: YES
+        SWIFT_OBJC_BRIDGING_HEADER: OpaqueIconThemer/OpaqueIconThemer-Bridging-Header.h
         INFOPLIST_KEY_CFBundleDisplayName: OpaqueIconThemer
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "OpaqueIconThemer сохраняет сгенерированную tinted-иконку, чтобы выбрать её при добавлении Команды на экран Домой."
