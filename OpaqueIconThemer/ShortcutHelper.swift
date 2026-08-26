@@ -1,4 +1,5 @@
 import Foundation
+import Photos
 import SwiftUI
 import UIKit
 
@@ -13,31 +14,64 @@ final class ShortcutHelper: NSObject, ObservableObject, UIDocumentInteractionCon
         guard !busy else { return }
 
         busy = true
-        status = "Собираю готовую Команду…"
+        status = "Сохраняю tinted-иконку в Фото…"
 
         Task {
+            var photoSaved = false
+
             do {
+                try await saveImageToPhotos(image)
+                photoSaved = true
+                status = "Иконка сохранена в Фото. Собираю готовую Команду…"
+
                 let fileURL = try await makeSignedShortcut(
-                    icon: image,
                     appName: appName,
                     bundleIdentifier: bundleIdentifier
                 )
 
-                status = "Готово: внутри уже одно действие «Открыть приложение» и встроенная иконка. Открой файл через «Команды», импортируй его и нажми «На экран Домой»."
+                status = "Готово: иконка сохранена в Фото, а внутри Команды уже одно действие «Открыть приложение». Импортируй Команду, нажми «На экран Домой» и сам выбери сохранённую картинку."
                 presentShortcutFile(fileURL)
                 busy = false
             } catch {
                 busy = false
-                status = "Не удалось создать Команду: \(error.localizedDescription)"
+                if photoSaved {
+                    status = "Иконка сохранена в Фото, но Команду создать не удалось: \(error.localizedDescription)"
+                } else {
+                    status = "Не удалось сохранить иконку/создать Команду: \(error.localizedDescription)"
+                }
             }
         }
     }
 
-    private func makeSignedShortcut(icon: UIImage, appName: String, bundleIdentifier: String) async throws -> URL {
-        guard let iconData = icon.pngData() else {
-            throw ShortcutError.iconEncodingFailed
+    private func saveImageToPhotos(_ image: UIImage) async throws {
+        var authorization = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+
+        if authorization == .notDetermined {
+            authorization = await withCheckedContinuation { continuation in
+                PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+                    continuation.resume(returning: status)
+                }
+            }
         }
 
+        guard authorization == .authorized || authorization == .limited else {
+            throw ShortcutError.photoAccessDenied
+        }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            } completionHandler: { success, error in
+                if success {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: error ?? ShortcutError.photoSaveFailed)
+                }
+            }
+        }
+    }
+
+    private func makeSignedShortcut(appName: String, bundleIdentifier: String) async throws -> URL {
         let selectedApp: [String: Any] = [
             "BundleIdentifier": bundleIdentifier,
             "Name": appName
@@ -60,8 +94,7 @@ final class ShortcutHelper: NSObject, ObservableObject, UIDocumentInteractionCon
             "WFWorkflowName": appName,
             "WFWorkflowIcon": [
                 "WFWorkflowIconStartColor": 2846468607,
-                "WFWorkflowIconGlyphNumber": 59511,
-                "WFWorkflowIconImageData": iconData
+                "WFWorkflowIconGlyphNumber": 59511
             ],
             "WFWorkflowImportQuestions": [],
             "WFWorkflowActions": [openAppAction],
@@ -124,7 +157,7 @@ final class ShortcutHelper: NSObject, ObservableObject, UIDocumentInteractionCon
 
     private func presentShortcutFile(_ fileURL: URL) {
         guard let presenter = topViewController() else {
-            status = "Команда создана, но не удалось открыть системное меню импорта."
+            status = "Команда создана, но не удалось открыть системное меню импорта. Иконка уже сохранена в Фото."
             return
         }
 
@@ -186,7 +219,8 @@ final class ShortcutHelper: NSObject, ObservableObject, UIDocumentInteractionCon
 }
 
 private enum ShortcutError: LocalizedError {
-    case iconEncodingFailed
+    case photoAccessDenied
+    case photoSaveFailed
     case plistEncodingFailed
     case invalidSigningURL
     case signingFailed(Int)
@@ -194,8 +228,10 @@ private enum ShortcutError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .iconEncodingFailed:
-            return "не удалось закодировать иконку"
+        case .photoAccessDenied:
+            return "нет разрешения на добавление изображений в Фото"
+        case .photoSaveFailed:
+            return "не удалось сохранить иконку в Фото"
         case .plistEncodingFailed:
             return "не удалось собрать файл Команды"
         case .invalidSigningURL:
