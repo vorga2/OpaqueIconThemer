@@ -14,6 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface OITPrivateAppScanner : NSObject
 + (NSArray<OITInstalledApplication *> *)installedApplications;
++ (nullable OITInstalledApplication *)installedApplicationForBundleIdentifier:(NSString *)bundleIdentifier;
 + (NSString *)scanStatus;
 @end
 
