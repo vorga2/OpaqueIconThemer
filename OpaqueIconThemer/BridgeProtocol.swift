@@ -85,7 +85,7 @@ final class SpringBoardBridgeClient {
             payload as CFData,
             timeout,
             timeout,
-            kCFRunLoopDefaultMode.rawValue,
+            CFRunLoopMode.defaultMode.rawValue,
             &response
         )
         guard result == kCFMessagePortSuccess else {
