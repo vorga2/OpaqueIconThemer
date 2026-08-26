@@ -26,8 +26,12 @@ struct ContentView: View {
                     Button {
                         importing = true
                     } label: {
-                        Label("Импортировать папку", systemImage: "folder.badge.plus")
+                        Label("Выбрать PNG", systemImage: "photo.badge.plus")
                     }
+
+                    Text("Имя файла должно быть bundle ID приложения, например com.apple.Preferences.png")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                     HStack {
                         Text("Иконок")
@@ -35,8 +39,8 @@ struct ContentView: View {
                         Text("\(store.iconCount)").foregroundStyle(.secondary)
                     }
 
-                    ForEach(store.bundleIDs.prefix(16), id: \.self) { id in
-                        HStack {
+                    ForEach(store.bundleIDs.prefix(24), id: \.self) { id in
+                        HStack(spacing: 12) {
                             if let image = store.preview(id) {
                                 Image(uiImage: image)
                                     .resizable()
@@ -44,7 +48,19 @@ struct ContentView: View {
                                     .frame(width: 38, height: 38)
                                     .clipShape(RoundedRectangle(cornerRadius: 9))
                             }
-                            Text(id).font(.caption.monospaced()).lineLimit(1)
+
+                            Text(id)
+                                .font(.caption.monospaced())
+                                .lineLimit(1)
+
+                            Spacer()
+
+                            Button(role: .destructive) {
+                                store.remove(id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
                         }
                     }
                 }
@@ -76,7 +92,9 @@ struct ContentView: View {
 
                 if let log = store.log {
                     Section("Лог") {
-                        Text(log).font(.caption.monospaced()).textSelection(.enabled)
+                        Text(log)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
                     }
                 }
             }
@@ -91,10 +109,10 @@ struct ContentView: View {
         }
         .fileImporter(
             isPresented: $importing,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
+            allowedContentTypes: [.png],
+            allowsMultipleSelection: true
         ) { result in
-            store.importFolder(result)
+            store.importFiles(result)
         }
         .confirmationDialog("Вернуть стандартные иконки?", isPresented: $clearConfirm) {
             Button("Вернуть", role: .destructive) {
