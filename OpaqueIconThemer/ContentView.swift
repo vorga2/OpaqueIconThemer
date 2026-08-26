@@ -208,27 +208,31 @@ private struct AppTintView: View {
                 Section {
                     Button {
                         guard let tintedIcon else { return }
-                        shortcutHelper.saveIconAndOpenShortcuts(tintedIcon, appName: app.displayName)
+                        shortcutHelper.generateReadyShortcut(
+                            tintedIcon,
+                            appName: app.displayName,
+                            bundleIdentifier: app.bundleIdentifier
+                        )
                     } label: {
                         HStack {
                             Spacer()
                             if shortcutHelper.busy {
                                 ProgressView().padding(.trailing, 6)
                             }
-                            Label("Сохранить и открыть Команды", systemImage: "wand.and.stars")
+                            Label("Создать готовую Команду", systemImage: "wand.and.stars")
                             Spacer()
                         }
                     }
                     .disabled(shortcutHelper.busy)
                 } footer: {
-                    Text("Иконка сохраняется в Фото, после чего открывается экран создания новой Команды. Название приложения копируется в буфер обмена.")
+                    Text("OpaqueIconThemer сам собирает .shortcut: внутри ровно одно действие «Открыть приложение», уже выбран \(app.displayName), а tinted-иконка вшита в файл. Для подписи готовой Команды используется HubSign; затем открой файл через «Команды».")
                 }
 
-                Section("Добавление на экран Домой") {
-                    Text("В Командах добавь действие «Открыть приложение», выбери \(app.displayName), затем «Поделиться» → «На экран Домой» и выбери только что сохранённую иконку.")
+                Section("Остался только экран Домой") {
+                    Text("После импорта открой меню Команды → «На экран Домой». Приложение и действие вручную выбирать уже не нужно.")
                         .font(.callout)
 
-                    Text("iOS не даёт обычному приложению автоматически добавить такой ярлык на экран Домой, поэтому отдельной фальшивой кнопки «Добавить сразу» здесь нет.")
+                    Text("iOS всё равно требует пользовательское подтверждение импорта и добавления ярлыка на экран Домой — обычное приложение не может нажать эти системные кнопки вместо тебя.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
