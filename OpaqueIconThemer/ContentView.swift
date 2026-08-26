@@ -213,16 +213,41 @@ private struct AppTintView: View {
     let app: InstalledAppInfo
 
     @State private var tintColor: Color = .blue
-    @State private var intensity = 0.88
+    @State private var mode: IconRenderMode = .auto
+    @State private var tintIntensity = 0.88
+    @State private var gradientStart = 0.50
+    @State private var gradientStrength = 0.16
     @StateObject private var shortcutHelper = ShortcutHelper()
+
+    private var renderOptions: IconRenderOptions {
+        IconRenderOptions(
+            mode: mode,
+            tintIntensity: tintIntensity,
+            gradientStart: gradientStart,
+            gradientStrength: gradientStrength
+        )
+    }
+
+    private var resolvedMode: IconRenderMode? {
+        guard let source = app.icon else { return nil }
+        return IconStyleRenderer.shared.resolvedMode(source: source, requested: mode)
+    }
 
     private var tintedIcon: UIImage? {
         guard let source = app.icon else { return nil }
-        return IconTintEngine.shared.render(
+        return IconStyleRenderer.shared.render(
             source: source,
             tint: UIColor(tintColor),
-            intensity: intensity
+            options: renderOptions
         )
+    }
+
+    private var resultTitle: String {
+        switch resolvedMode {
+        case .smartLogo: return "Логотип"
+        case .tint: return "Тинт"
+        default: return "Результат"
+        }
     }
 
     var body: some View {
@@ -237,24 +262,77 @@ private struct AppTintView: View {
                         preview(image: source, title: "Оригинал")
 
                         if let tintedIcon {
-                            preview(image: tintedIcon, title: "Тинт")
+                            preview(image: tintedIcon, title: resultTitle)
                         }
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                 }
 
-                Section("Цвет") {
-                    ColorPicker("Цвет тинта", selection: $tintColor, supportsOpacity: false)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Сила")
-                            Spacer()
-                            Text("\(Int(intensity * 100))%")
-                                .foregroundStyle(.secondary)
+                Section("Режим") {
+                    Picker("Обработка", selection: $mode) {
+                        ForEach(IconRenderMode.allCases) { item in
+                            Text(item.title).tag(item)
                         }
-                        Slider(value: $intensity, in: 0.35...1.0)
+                    }
+                    .pickerStyle(.segmented)
+
+                    if mode == .auto, let resolvedMode {
+                        HStack {
+                            Text("Авто выбрало")
+                            Spacer()
+                            Label(
+                                resolvedMode == .smartLogo ? "Умный логотип" : "Обычный тинт",
+                                systemImage: resolvedMode == .smartLogo ? "wand.and.stars" : "paintbrush.fill"
+                            )
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Text(modeDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Цвет") {
+                    ColorPicker("Цвет", selection: $tintColor, supportsOpacity: false)
+
+                    if mode != .smartLogo {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Сила тинта")
+                                Spacer()
+                                Text("\(Int(tintIntensity * 100))%")
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $tintIntensity, in: 0.20...1.0)
+                        }
+                    }
+                }
+
+                if mode != .tint {
+                    Section("Градиент логотипа") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Начало градиента")
+                                Spacer()
+                                Text("\(Int(gradientStart * 100))%")
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $gradientStart, in: 0.20...0.80)
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Интенсивность")
+                                Spacer()
+                                Text("\(Int(gradientStrength * 100))%")
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $gradientStrength, in: 0.0...0.45)
+                        }
+                    } footer: {
+                        Text("До выбранной точки логотип остаётся белым. Ниже плавно появляется выбранный цвет. В режиме «Авто» эти параметры применяются только если иконка распознана как простой логотип.")
                     }
                 }
 
@@ -278,7 +356,7 @@ private struct AppTintView: View {
                     }
                     .disabled(shortcutHelper.busy)
                 } footer: {
-                    Text("OpaqueIconThemer сохранит tinted-иконку отдельной картинкой в Фото и соберёт .shortcut с одним действием «Открыть приложение». Картинка в сам файл Команды не встраивается.")
+                    Text("OpaqueIconThemer сохранит готовую иконку отдельной картинкой в Фото и соберёт .shortcut с одним действием «Открыть приложение». Картинка в сам файл Команды не встраивается.")
                 }
 
                 Section("Остался только экран Домой") {
@@ -308,6 +386,17 @@ private struct AppTintView: View {
         }
         .navigationTitle(app.displayName)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var modeDescription: String {
+        switch mode {
+        case .auto:
+            return "Авто анализирует детализацию и цвета: простые иконки делает белым логотипом с градиентом, сложные и игровые — обычным тинтом."
+        case .smartLogo:
+            return "Всегда пытается выделить главный логотип, оставляет исходный фон и перекрашивает только сам знак. Если маска не получается, используется безопасный тинт."
+        case .tint:
+            return "Не распознаёт форму и применяет обычный однотонный тинт ко всей иконке. Лучше для игр и очень детализированных изображений."
+        }
     }
 
     @ViewBuilder
