@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import FamilyControls
+import ManagedSettings
 
 struct ContentView: View {
     @AppStorage("oit.localAppScanAllowed") private var localAppScanAllowed = false
@@ -34,19 +36,19 @@ private struct LocalScanConsentView: View {
                     Text("Доступ к списку приложений")
                         .font(.title2.bold())
 
-                    Text("OpaqueIconThemer может локально просканировать установленные приложения, чтобы показать их название, bundle ID и доступную системе иконку. Список никуда не отправляется.")
+                    Text("OpaqueIconThemer может локально просканировать установленные приложения, включая кастомные и sideloaded-приложения, если их видит системный Screen Time API. Список никуда не отправляется.")
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
                 }
 
                 Button(action: allow) {
-                    Text("Разрешить локальный скан")
+                    Text("Продолжить")
                         .frame(maxWidth: .infinity)
                         .fontWeight(.semibold)
                 }
                 .buttonStyle(.borderedProminent)
 
-                Text("Это внутреннее согласие приложения. iOS не предоставляет отдельного системного разрешения на чтение списка установленных приложений.")
+                Text("После этого iOS может показать системный запрос на доступ к данным использования приложений.")
                     .font(.caption)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
@@ -148,7 +150,7 @@ private struct AppsBrowserView: View {
                         }
 
                         Button(role: .destructive, action: revokeConsent) {
-                            Label("Отозвать разрешение", systemImage: "hand.raised")
+                            Label("Отозвать локальное согласие", systemImage: "hand.raised")
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -168,30 +170,42 @@ private struct AppRow: View {
     let app: InstalledAppInfo
 
     var body: some View {
-        HStack(spacing: 12) {
-            Group {
-                if let icon = app.icon {
-                    Image(uiImage: icon)
-                        .resizable()
-                        .scaledToFit()
-                } else {
-                    Image(systemName: "app.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .padding(8)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(app.displayName)
+        if let token = app.applicationToken {
+            VStack(alignment: .leading, spacing: 4) {
+                Label(token)
+                    .labelStyle(.titleAndIcon)
                     .lineLimit(1)
                 Text(app.bundleIdentifier)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+            }
+        } else {
+            HStack(spacing: 12) {
+                Group {
+                    if let icon = app.icon {
+                        Image(uiImage: icon)
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        Image(systemName: "app.fill")
+                            .resizable()
+                            .scaledToFit()
+                            .padding(8)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(app.displayName)
+                        .lineLimit(1)
+                    Text(app.bundleIdentifier)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
         }
     }
@@ -282,7 +296,7 @@ private struct AppTintView: View {
                     EmptyStateView(
                         title: "Иконка недоступна",
                         symbol: "photo.badge.exclamationmark",
-                        message: "iOS отдала приложение, но не разрешила прочитать его иконку. Для него ничего подставлять не будем."
+                        message: "Приложение найдено, но iOS не дала изображение иконки. Для Screen Time-приложений OpaqueIconThemer дополнительно пытается отрисовать системную token-иконку."
                     )
                 }
             }
