@@ -52,18 +52,45 @@ final class InstalledAppsStore: ObservableObject {
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
 
-            status = "Проверяю LaunchServices, MobileInstallation и app-каталоги…"
+            status = "Проверяю все доступные источники внутри iPhone…"
             await Task.yield()
 
-            let raw = OITPrivateAppScanner.installedApplications()
-            apps = raw.map {
-                InstalledAppInfo(
-                    bundleIdentifier: $0.bundleIdentifier,
-                    displayName: $0.displayName,
-                    icon: $0.icon
+            let primaryRaw = OITPrivateAppScanner.installedApplications()
+            let primaryStatus = OITPrivateAppScanner.scanStatus()
+
+            let deepRaw = OITOnDeviceAppDiscovery.discoverApplications()
+            let deepStatus = OITOnDeviceAppDiscovery.status()
+
+            var merged: [String: InstalledAppInfo] = [:]
+            for raw in primaryRaw + deepRaw {
+                let candidate = InstalledAppInfo(
+                    bundleIdentifier: raw.bundleIdentifier,
+                    displayName: raw.displayName,
+                    icon: raw.icon
                 )
+
+                if let existing = merged[candidate.bundleIdentifier] {
+                    let existingHasUsefulName = existing.displayName != existing.bundleIdentifier
+                    let candidateHasUsefulName = candidate.displayName != candidate.bundleIdentifier
+                    merged[candidate.bundleIdentifier] = InstalledAppInfo(
+                        bundleIdentifier: candidate.bundleIdentifier,
+                        displayName: (!existingHasUsefulName && candidateHasUsefulName) ? candidate.displayName : existing.displayName,
+                        icon: existing.icon ?? candidate.icon
+                    )
+                } else {
+                    merged[candidate.bundleIdentifier] = candidate
+                }
             }
-            status = OITPrivateAppScanner.scanStatus()
+
+            apps = merged.values.sorted {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+
+            if apps.isEmpty {
+                status = "\(primaryStatus) · \(deepStatus)"
+            } else {
+                status = "Найдено: \(apps.count) · \(deepStatus)"
+            }
             scanning = false
 
             if apps.isEmpty {
