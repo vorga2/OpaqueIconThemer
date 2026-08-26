@@ -98,7 +98,7 @@ private struct AppsBrowserView: View {
                         }
                     } footer: {
                         if !store.isBundleIDSearch {
-                            Text("Если массовый список закрыт iOS, введи полный bundle ID — например com.apple.Preferences.")
+                            Text("Если Screen Time helper недоступен из-за sideload-подписи, приложение автоматически пробует локальные запасные способы.")
                         }
                     }
                 } else {
@@ -170,42 +170,40 @@ private struct AppRow: View {
     let app: InstalledAppInfo
 
     var body: some View {
-        if let token = app.applicationToken {
-            VStack(alignment: .leading, spacing: 4) {
-                Label(token)
-                    .labelStyle(.titleAndIcon)
-                    .lineLimit(1)
+        HStack(spacing: 12) {
+            Group {
+                if let icon = app.icon {
+                    Image(uiImage: icon)
+                        .resizable()
+                        .scaledToFit()
+                } else if let token = app.applicationToken {
+                    Label(token)
+                        .labelStyle(.iconOnly)
+                } else {
+                    Image(systemName: "app.fill")
+                        .resizable()
+                        .scaledToFit()
+                        .padding(8)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 44, height: 44)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                if app.displayName == app.bundleIdentifier, let token = app.applicationToken {
+                    Label(token)
+                        .labelStyle(.titleOnly)
+                        .lineLimit(1)
+                } else {
+                    Text(app.displayName)
+                        .lineLimit(1)
+                }
+
                 Text(app.bundleIdentifier)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-            }
-        } else {
-            HStack(spacing: 12) {
-                Group {
-                    if let icon = app.icon {
-                        Image(uiImage: icon)
-                            .resizable()
-                            .scaledToFit()
-                    } else {
-                        Image(systemName: "app.fill")
-                            .resizable()
-                            .scaledToFit()
-                            .padding(8)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(app.displayName)
-                        .lineLimit(1)
-                    Text(app.bundleIdentifier)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
             }
         }
     }
@@ -280,7 +278,7 @@ private struct AppTintView: View {
                     }
                     .disabled(shortcutHelper.busy)
                 } footer: {
-                    Text("OpaqueIconThemer сохранит tinted-иконку отдельной картинкой в Фото и соберёт .shortcut с одним действием «Открыть приложение». Картинка в сам файл Команды больше не встраивается.")
+                    Text("OpaqueIconThemer сохранит tinted-иконку отдельной картинкой в Фото и соберёт .shortcut с одним действием «Открыть приложение». Картинка в сам файл Команды не встраивается.")
                 }
 
                 Section("Остался только экран Домой") {
@@ -296,7 +294,7 @@ private struct AppTintView: View {
                     EmptyStateView(
                         title: "Иконка недоступна",
                         symbol: "photo.badge.exclamationmark",
-                        message: "Приложение найдено, но iOS не дала изображение иконки. Для Screen Time-приложений OpaqueIconThemer дополнительно пытается отрисовать системную token-иконку."
+                        message: "Приложение найдено, но iOS не дала изображение иконки. Для App Store-приложений OpaqueIconThemer дополнительно пытается получить качественную 512px-иконку."
                     )
                 }
             }
