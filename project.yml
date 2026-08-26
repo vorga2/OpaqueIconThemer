@@ -1,0 +1,21 @@
+name: OpaqueIconThemer
+options:
+  bundleIdPrefix: com.nomadvorga
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  OpaqueIconThemer:
+    type: application
+    platform: iOS
+    sources:
+      - OpaqueIconThemer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nomadvorga.opaqueiconthemer
+        PRODUCT_NAME: OpaqueIconThemer
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: OpaqueIconThemer
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
