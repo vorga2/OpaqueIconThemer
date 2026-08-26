@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
   push:
 
+concurrency:
+  group: opaque-icon-themer-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: macos-15
