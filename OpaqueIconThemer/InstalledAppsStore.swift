@@ -23,7 +23,13 @@ final class InstalledAppsStore: ObservableObject {
     @Published private(set) var apps: [InstalledAppInfo] = []
     @Published private(set) var scanning = false
     @Published private(set) var status = ""
-    @Published var search = ""
+    @Published var search = "" {
+        didSet {
+            scheduleDirectBundleLookup()
+        }
+    }
+
+    private var directLookupTask: Task<Void, Never>?
 
     var filteredApps: [InstalledAppInfo] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -46,7 +52,7 @@ final class InstalledAppsStore: ObservableObject {
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
 
-            status = "Проверяю LaunchServices…"
+            status = "Проверяю LaunchServices, MobileInstallation и app-каталоги…"
             await Task.yield()
 
             let raw = OITPrivateAppScanner.installedApplications()
@@ -59,6 +65,39 @@ final class InstalledAppsStore: ObservableObject {
             }
             status = OITPrivateAppScanner.scanStatus()
             scanning = false
+
+            if apps.isEmpty {
+                scheduleDirectBundleLookup()
+            }
         }
+    }
+
+    private func scheduleDirectBundleLookup() {
+        directLookupTask?.cancel()
+
+        guard !scanning, apps.isEmpty else { return }
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard query.count >= 4, query.contains("."), !query.contains(" ") else { return }
+
+        directLookupTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.resolveBundleID(query)
+        }
+    }
+
+    private func resolveBundleID(_ query: String) {
+        guard let raw = OITPrivateAppScanner.installedApplication(forBundleIdentifier: query) else {
+            status = "Массовый список закрыт; прямой lookup \(query) тоже ничего не вернул"
+            return
+        }
+
+        let item = InstalledAppInfo(
+            bundleIdentifier: raw.bundleIdentifier,
+            displayName: raw.displayName,
+            icon: raw.icon
+        )
+        apps = [item]
+        status = "Найдено напрямую: \(item.bundleIdentifier)"
     }
 }
