@@ -235,10 +235,34 @@ private struct AppTintView: View {
 
     private var tintedIcon: UIImage? {
         guard let source = app.icon else { return nil }
+
+        if resolvedMode == .smartLogo {
+            return AppleLikeLogoRenderer.shared.render(
+                source: source,
+                tint: UIColor(tintColor),
+                gradientStart: gradientStart,
+                gradientStrength: gradientStrength
+            ) ?? IconStyleRenderer.shared.render(
+                source: source,
+                tint: UIColor(tintColor),
+                options: IconRenderOptions(
+                    mode: .tint,
+                    tintIntensity: tintIntensity,
+                    gradientStart: gradientStart,
+                    gradientStrength: gradientStrength
+                )
+            )
+        }
+
         return IconStyleRenderer.shared.render(
             source: source,
             tint: UIColor(tintColor),
-            options: renderOptions
+            options: IconRenderOptions(
+                mode: .tint,
+                tintIntensity: tintIntensity,
+                gradientStart: gradientStart,
+                gradientStrength: gradientStrength
+            )
         )
     }
 
@@ -395,7 +419,7 @@ private struct AppTintView: View {
         case .auto:
             return "Авто анализирует детализацию и цвета: простые иконки делает белым логотипом с градиентом, сложные и игровые — обычным тинтом."
         case .smartLogo:
-            return "Всегда пытается выделить главный логотип, оставляет исходный фон и перекрашивает только сам знак. Если маска не получается, используется безопасный тинт."
+            return "Выделяет главный логотип, сохраняет полупрозрачность, антиалиасинг и мягкие детали знака. Итоговый фон всегда полностью непрозрачный. Если маска не получается, используется безопасный тинт."
         case .tint:
             return "Не распознаёт форму и применяет обычный однотонный тинт ко всей иконке. Лучше для игр и очень детализированных изображений."
         }
