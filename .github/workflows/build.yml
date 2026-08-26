@@ -2,11 +2,6 @@ name: Build OpaqueIconThemer
 
 on:
   workflow_dispatch:
-  push:
-
-concurrency:
-  group: opaque-icon-themer-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -45,67 +40,7 @@ jobs:
           cd "$RUNNER_TEMP"
           zip -qry OpaqueIconThemer.ipa Payload
 
-      - name: Build SpringBoard bridge
-        run: |
-          set -euo pipefail
-          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          xcrun --sdk iphoneos clang \
-            -fobjc-arc \
-            -dynamiclib \
-            -arch arm64 \
-            -arch arm64e \
-            -miphoneos-version-min=16.0 \
-            -isysroot "$SDK" \
-            -framework Foundation \
-            -framework UIKit \
-            -framework CoreFoundation \
-            SpringBoardBridge/OITBridge.m \
-            -o "$RUNNER_TEMP/OpaqueIconThemerBridge.dylib"
-
-          codesign -f -s - "$RUNNER_TEMP/OpaqueIconThemerBridge.dylib"
-
-          mkdir -p "$RUNNER_TEMP/Bridge"
-          cp "$RUNNER_TEMP/OpaqueIconThemerBridge.dylib" "$RUNNER_TEMP/Bridge/"
-          cp SpringBoardBridge/OpaqueIconThemerBridge.plist "$RUNNER_TEMP/Bridge/"
-          cp Tools/install_bridge_ssh.sh "$RUNNER_TEMP/Bridge/"
-
-          cd "$RUNNER_TEMP"
-          zip -qry OpaqueIconThemerBridge.zip Bridge
-
-      - name: Pack rootless bridge DEB
-        run: |
-          set -euo pipefail
-          PKGROOT="$RUNNER_TEMP/OpaqueIconThemerBridgeRootless"
-          INJECT_DIR="$PKGROOT/var/jb/Library/MobileSubstrate/DynamicLibraries"
-
-          mkdir -p "$PKGROOT/DEBIAN" "$INJECT_DIR"
-          cp SpringBoardBridge/package/DEBIAN/control "$PKGROOT/DEBIAN/control"
-          cp SpringBoardBridge/package/DEBIAN/postinst "$PKGROOT/DEBIAN/postinst"
-          cp SpringBoardBridge/package/DEBIAN/prerm "$PKGROOT/DEBIAN/prerm"
-          chmod 755 "$PKGROOT/DEBIAN/postinst" "$PKGROOT/DEBIAN/prerm"
-
-          cp "$RUNNER_TEMP/OpaqueIconThemerBridge.dylib" \
-            "$INJECT_DIR/OpaqueIconThemerBridge.dylib"
-          cp SpringBoardBridge/OpaqueIconThemerBridge.plist \
-            "$INJECT_DIR/OpaqueIconThemerBridge.plist"
-          chmod 755 "$INJECT_DIR/OpaqueIconThemerBridge.dylib"
-          chmod 644 "$INJECT_DIR/OpaqueIconThemerBridge.plist"
-
-          dpkg-deb --build "$PKGROOT" "$RUNNER_TEMP/OpaqueIconThemerBridge.deb"
-          dpkg-deb --info "$RUNNER_TEMP/OpaqueIconThemerBridge.deb"
-          dpkg-deb --contents "$RUNNER_TEMP/OpaqueIconThemerBridge.deb"
-
       - uses: actions/upload-artifact@v4
         with:
           name: OpaqueIconThemer-IPA
           path: ${{ runner.temp }}/OpaqueIconThemer.ipa
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: OpaqueIconThemer-SpringBoardBridge
-          path: ${{ runner.temp }}/OpaqueIconThemerBridge.zip
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: OpaqueIconThemer-Rootless-DEB
-          path: ${{ runner.temp }}/OpaqueIconThemerBridge.deb

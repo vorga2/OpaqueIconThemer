@@ -2,13 +2,6 @@ name: Build Tint Utility Fast
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-
-concurrency:
-  group: tint-utility-fast-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
