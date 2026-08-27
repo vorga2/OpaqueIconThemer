@@ -31,7 +31,7 @@ final class AppStoreCatalogStore: ObservableObject {
     }
 
     // Stable, well-known App Store apps shown before the user types anything.
-    // Artwork/name are still resolved live from Apple's catalog, so the list does not ship icons.
+    // Artwork/name are resolved live from Apple's catalog, so no third-party icons are bundled.
     private static let featuredSeeds: [(bundleID: String, fallbackName: String)] = [
         ("ph.telegra.Telegraph", "Telegram"),
         ("com.google.ios.youtube", "YouTube"),
@@ -73,7 +73,7 @@ final class AppStoreCatalogStore: ObservableObject {
             featured = loaded
             loading = false
             status = loaded.isEmpty
-                ? "Не удалось получить каталог App Store. Проверь интернет." 
+                ? "Не удалось получить каталог App Store. Проверь интернет."
                 : "Можно выбрать готовое приложение или найти другое по названию."
         }
     }
@@ -133,7 +133,7 @@ final class AppStoreCatalogStore: ObservableObject {
                 URLQueryItem(name: "term", value: term),
                 URLQueryItem(name: "country", value: region),
                 URLQueryItem(name: "entity", value: "software"),
-                URLQueryItem(name: "limit", value: "30")
+                URLQueryItem(name: "limit", value: "24")
             ]
             guard let url = components.url else { continue }
 
@@ -146,40 +146,29 @@ final class AppStoreCatalogStore: ObservableObject {
                       (200..<300).contains(http.statusCode) else { continue }
 
                 let decoded = try JSONDecoder().decode(SearchResponse.self, from: data)
-                let valid = decoded.results.prefix(24).compactMap { item -> (String, String, String?)? in
+                var output: [InstalledAppInfo] = []
+
+                // Keep this sequential: InstalledAppInfo contains UIImage/ApplicationToken and is
+                // intentionally not Sendable. This avoids Swift 6 strict-concurrency violations.
+                for item in decoded.results.prefix(24) {
+                    if Task.isCancelled { return [] }
                     guard let bundleID = item.bundleId,
                           let name = item.trackName,
                           !bundleID.isEmpty,
-                          !name.isEmpty else { return nil }
-                    return (bundleID, name, item.artworkUrl512 ?? item.artworkUrl100)
+                          !name.isEmpty else { continue }
+
+                    let image = await fetchArtwork(item.artworkUrl512 ?? item.artworkUrl100)
+                    output.append(
+                        InstalledAppInfo(
+                            bundleIdentifier: bundleID,
+                            displayName: name,
+                            icon: image,
+                            applicationToken: nil
+                        )
+                    )
                 }
 
-                var output: [InstalledAppInfo] = []
-                await withTaskGroup(of: InstalledAppInfo?.self) { group in
-                    for entry in valid {
-                        group.addTask {
-                            let image = await fetchArtwork(entry.2)
-                            return InstalledAppInfo(
-                                bundleIdentifier: entry.0,
-                                displayName: entry.1,
-                                icon: image,
-                                applicationToken: nil
-                            )
-                        }
-                    }
-                    for await app in group {
-                        if let app { output.append(app) }
-                    }
-                }
-
-                if !output.isEmpty {
-                    // Task groups finish out of order; restore Apple's search ranking.
-                    let rank = Dictionary(uniqueKeysWithValues: valid.enumerated().map { ($0.element.0.lowercased(), $0.offset) })
-                    return output.sorted {
-                        (rank[$0.bundleIdentifier.lowercased()] ?? .max) <
-                        (rank[$1.bundleIdentifier.lowercased()] ?? .max)
-                    }
-                }
+                if !output.isEmpty { return output }
             } catch {
                 continue
             }
