@@ -45,6 +45,9 @@ jobs:
       - name: Keep Tint+ strength on fill only
         run: python3 Tools/patch_tint_strength_fill_only.py
 
+      - name: Lock Tint+ geometry to the detected mask
+        run: python3 Tools/patch_tint_strength_geometry_lock.py
+
       - name: Generate project
         run: xcodegen generate
 
