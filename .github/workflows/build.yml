@@ -30,6 +30,9 @@ jobs:
       - name: Keep Apple Mono logo fill white
         run: python3 Tools/patch_apple_mono_white_fill.py
 
+      - name: Remove Apple Mono outer gray outline
+        run: python3 Tools/patch_mono_no_outline.py
+
       - name: Generate project
         run: xcodegen generate
 
