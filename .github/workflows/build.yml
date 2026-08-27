@@ -87,6 +87,9 @@ jobs:
       - name: Fix live App Store icons and force UK catalog
         run: python3 Tools/patch_appstore_live_icon_refresh.py
 
+      - name: Add custom icon import/edit/save
+        run: python3 Tools/patch_custom_icon_editor.py
+
       - name: Generate project
         run: xcodegen generate
 
