@@ -18,6 +18,9 @@ jobs:
       - name: Apply Liquid Glass UI fixes
         run: python3 Tools/patch_liquid_ui_rounding_unified_tint.py
 
+      - name: Apply LunaPic-style global tint
+        run: python3 Tools/apply_global_tint_ui.py
+
       - name: Generate project
         run: xcodegen generate
 
