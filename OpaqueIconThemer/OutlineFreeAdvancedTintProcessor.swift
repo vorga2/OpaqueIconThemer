@@ -1,15 +1,24 @@
 import Foundation
 import UIKit
 
-/// Tint+ compositor that is deliberately incapable of drawing a third-colour rim.
+/// Final advanced Tint+ compositor.
 ///
-/// Output is built from exactly two materials:
-/// - background material;
-/// - foreground/logo material.
+/// The previous versions still produced a visible rim because they reconstructed a soft
+/// antialiased coverage band around the detected silhouette. Even though that band only mixed two
+/// colours, tint/gradient made it visible as a coloured outline and background intensity exposed
+/// residual pale source pixels.
 ///
-/// The antialiased edge is only coverage between those two materials. Source edge pixels are
-/// never sampled as foreground colour, so a white/pale background baked into the original icon
-/// cannot survive as an outline. Tint strength and gradient never affect geometry.
+/// This version deliberately has NO generated soft exterior band at all:
+/// - one fixed binary foreground silhouette is built at the final 1024px resolution;
+/// - pixels outside that silhouette are always background, period;
+/// - tint strength and gradient only change foreground MATERIAL colour;
+/// - background intensity only changes background MATERIAL colour;
+/// - source edge pixels never decide geometry;
+/// - contaminated boundary colour is replaced from an eroded interior colour field;
+/// - no 512 -> 1024 scaling pass and no silhouette shadow/bevel pass are involved.
+///
+/// SpringBoard / SwiftUI performs the final display downsampling of the 1024px bitmap, which gives
+/// normal visual antialiasing without baking a white/blue third-colour rim into the icon itself.
 final class OutlineFreeAdvancedTintProcessor {
     static let shared = OutlineFreeAdvancedTintProcessor()
 
@@ -30,8 +39,6 @@ final class OutlineFreeAdvancedTintProcessor {
         gradientStart: CGFloat,
         gradientStrength: CGFloat
     ) -> UIImage? {
-        // Work at final resolution. No later 512 -> 1024 interpolation pass is allowed to grow
-        // the silhouette or create a coloured fringe.
         let width = 1024
         let height = 1024
         let count = width * height
@@ -53,27 +60,30 @@ final class OutlineFreeAdvancedTintProcessor {
         )
         guard locked.count == count else { return nil }
 
-        // Convert the permissive detector into one strict silhouette. The only soft area is a
-        // one-pixel antialias transition reconstructed from this binary silhouette; weak detected
-        // fringe outside the real logo is discarded completely.
+        // IMPORTANT: geometry is binary and is never blurred/dilated afterwards. The old
+        // boxBlur(hard, radius: 1) created non-zero pixels outside the real silhouette; that was the
+        // persistent coloured outline seen when tint strength or gradient increased.
         var hard = [CGFloat](repeating: 0, count: count)
         for i in 0..<count {
-            hard[i] = locked[i] >= 0.62 ? 1 : 0
-        }
-        let feathered = boxBlur(hard, width: width, height: height, radius: 1)
-        var coverage = [CGFloat](repeating: 0, count: count)
-        for i in 0..<count {
-            coverage[i] = smoothstep(edge0: 0.16, edge1: 0.84, value: feathered[i])
+            hard[i] = locked[i] >= 0.66 ? 1 : 0
         }
 
-        // Core pixels provide the logo's real source colour. Edge pixels NEVER provide colour:
-        // their foreground colour is propagated from nearby confident core pixels instead.
+        // Only deep interior pixels are allowed to provide the source material colour. The outer
+        // 2–3 px of the detected logo can contain the original white/pale background baked by the
+        // source icon's own antialiasing, so never use those pixels as boundary colour.
+        var deepCore = erodeBinaryMask(hard, width: width, height: height, radius: 3)
+        if !deepCore.contains(where: { $0 > 0.5 }) {
+            // Very thin artwork can disappear under erosion. Keep it renderable, while geometry is
+            // still strict and cannot grow because `hard` remains the only output silhouette.
+            deepCore = hard
+        }
+
         var coreWeight = [CGFloat](repeating: 0, count: count)
         var coreR = [CGFloat](repeating: 0, count: count)
         var coreG = [CGFloat](repeating: 0, count: count)
         var coreB = [CGFloat](repeating: 0, count: count)
 
-        for i in 0..<count where hard[i] > 0.5 {
+        for i in 0..<count where deepCore[i] > 0.5 {
             let p = i * 4
             let c = srgbToLinear(RGB(
                 r: CGFloat(pixels[p]) / 255.0,
@@ -86,13 +96,13 @@ final class OutlineFreeAdvancedTintProcessor {
             coreB[i] = c.b
         }
 
-        // A small local colour field carries real interior material into the AA transition without
-        // smearing distant artwork together.
-        let radius = 7
-        let localWeight = boxBlur(coreWeight, width: width, height: height, radius: radius)
-        let localR = boxBlur(coreR, width: width, height: height, radius: radius)
-        let localG = boxBlur(coreG, width: width, height: height, radius: radius)
-        let localB = boxBlur(coreB, width: width, height: height, radius: radius)
+        // Propagate real interior colour to the strict boundary. This field is used ONLY for colour;
+        // it can never affect shape/coverage.
+        let colourRadius = 11
+        let localWeight = boxBlur(coreWeight, width: width, height: height, radius: colourRadius)
+        let localR = boxBlur(coreR, width: width, height: height, radius: colourRadius)
+        let localG = boxBlur(coreG, width: width, height: height, radius: colourRadius)
+        let localB = boxBlur(coreB, width: width, height: height, radius: colourRadius)
 
         let corners = backgroundCorners(pixels: pixels, width: width, height: height)
         let bgTint = srgbToLinear(rgb(from: backgroundTint))
@@ -117,18 +127,19 @@ final class OutlineFreeAdvancedTintProcessor {
             for x in 0..<width {
                 let i = y * width + x
                 let p = i * 4
-                let cov = coverage[i]
                 let xNorm = CGFloat(x) / CGFloat(max(1, width - 1))
 
                 let originalBackground = srgbToLinear(bilinear(corners, x: xNorm, y: yNorm))
                 let backgroundMaterial = mix(originalBackground, bgTint, amount: bgStrength)
 
-                guard cov > 0.0001 else {
+                // Outside is background with ZERO foreground contribution. No feather, no halo,
+                // no gradient/tint can ever make this pixel part of the logo.
+                guard hard[i] > 0.5 else {
                     write(linearToSRGB(backgroundMaterial), to: &out, offset: p)
                     continue
                 }
 
-                let sourceCore = srgbToLinear(RGB(
+                let sourcePixel = srgbToLinear(RGB(
                     r: CGFloat(pixels[p]) / 255.0,
                     g: CGFloat(pixels[p + 1]) / 255.0,
                     b: CGFloat(pixels[p + 2]) / 255.0
@@ -143,28 +154,25 @@ final class OutlineFreeAdvancedTintProcessor {
                         b: localB[i] / support
                     ))
                 } else {
-                    propagated = sourceCore
+                    propagated = sourcePixel
                 }
 
-                // Fully interior pixels may keep their source detail. The AA transition always uses
-                // propagated interior colour, never the flattened source edge colour.
-                let interior = smoothstep(edge0: 0.88, edge1: 1.0, value: cov)
-                let cleanBase = mix(propagated, sourceCore, amount: interior)
+                // Deep interior keeps original local detail. Every boundary pixel uses propagated
+                // interior colour instead of its possibly white-contaminated flattened source RGB.
+                let cleanBase = deepCore[i] > 0.5 ? sourcePixel : propagated
 
-                // "Сила тинта" changes material colour only.
+                // "Сила тинта" changes only foreground material. It has no access to `hard`.
                 var foregroundMaterial = mix(cleanBase, fgTint, amount: fgStrength)
 
-                // Advanced gradient is independent from tint strength and always uses background
-                // tint colour, exactly as requested. It is still clipped to the same fixed logo
-                // coverage so it cannot create an outline.
+                // Gradient changes only foreground material, is independent from tint strength, and
+                // uses background tint colour as requested. It also has no access to geometry.
                 if gradientAmount > 0.0001 {
                     foregroundMaterial = mix(foregroundMaterial, bgTint, amount: gradientAmount)
                 }
 
-                // This is the only edge operation: a two-material coverage mix. There is no third
-                // white/blue/gray outline colour anywhere in the pipeline.
-                let result = mix(backgroundMaterial, foregroundMaterial, amount: cov)
-                write(linearToSRGB(result), to: &out, offset: p)
+                // Binary material selection is intentional. Display-time downsampling gives normal
+                // AA; the stored icon itself contains no generated outline band.
+                write(linearToSRGB(foregroundMaterial), to: &out, offset: p)
             }
         }
 
@@ -207,7 +215,36 @@ final class OutlineFreeAdvancedTintProcessor {
         return mix(top, bottom, amount: clamp(y, 0, 1))
     }
 
-    // MARK: - Filters
+    // MARK: - Geometry / filters
+
+    private func erodeBinaryMask(_ input: [CGFloat], width: Int, height: Int, radius: Int) -> [CGFloat] {
+        guard radius > 0, input.count == width * height else { return input }
+        var out = [CGFloat](repeating: 0, count: input.count)
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let i = y * width + x
+                guard input[i] > 0.5 else { continue }
+
+                var survives = true
+                let minY = max(0, y - radius)
+                let maxY = min(height - 1, y + radius)
+                let minX = max(0, x - radius)
+                let maxX = min(width - 1, x + radius)
+
+                outer: for yy in minY...maxY {
+                    for xx in minX...maxX {
+                        if input[yy * width + xx] <= 0.5 {
+                            survives = false
+                            break outer
+                        }
+                    }
+                }
+                out[i] = survives ? 1 : 0
+            }
+        }
+        return out
+    }
 
     private func boxBlur(_ input: [CGFloat], width: Int, height: Int, radius: Int) -> [CGFloat] {
         guard radius > 0, input.count == width * height else { return input }
@@ -258,7 +295,10 @@ final class OutlineFreeAdvancedTintProcessor {
         let bitmap = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
         guard let ctx = CGContext(data: &data, width: width, height: height, bitsPerComponent: 8,
                                   bytesPerRow: width * 4, space: space, bitmapInfo: bitmap) else { return nil }
-        ctx.interpolationQuality = .high
+
+        // Do not invent interpolated pale/blue source-edge pixels while preparing the working copy.
+        // Geometry is generated separately by the detector; source RGB is only material data.
+        ctx.interpolationQuality = .none
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
         return data
     }
@@ -276,35 +316,61 @@ final class OutlineFreeAdvancedTintProcessor {
 
     private func rgb(from color: UIColor) -> RGB {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return RGB(r: 0, g: 0.478, b: 1) }
+        guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else {
+            return RGB(r: 0, g: 0.478, b: 1)
+        }
         return RGB(r: r, g: g, b: b)
     }
 
-    private func srgbToLinear(_ c: RGB) -> RGB { RGB(r: srgbToLinear(c.r), g: srgbToLinear(c.g), b: srgbToLinear(c.b)) }
+    private func srgbToLinear(_ c: RGB) -> RGB {
+        RGB(r: srgbToLinear(c.r), g: srgbToLinear(c.g), b: srgbToLinear(c.b))
+    }
+
     private func srgbToLinear(_ v: CGFloat) -> CGFloat {
         let x = clamp(v, 0, 1)
         return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4)
     }
-    private func linearToSRGB(_ c: RGB) -> RGB { RGB(r: linearToSRGB(c.r), g: linearToSRGB(c.g), b: linearToSRGB(c.b)) }
+
+    private func linearToSRGB(_ c: RGB) -> RGB {
+        RGB(r: linearToSRGB(c.r), g: linearToSRGB(c.g), b: linearToSRGB(c.b))
+    }
+
     private func linearToSRGB(_ v: CGFloat) -> CGFloat {
         let x = max(0, v)
         return x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1 / 2.4) - 0.055
     }
+
     private func mix(_ a: RGB, _ b: RGB, amount: CGFloat) -> RGB {
         let t = clamp(amount, 0, 1)
-        return RGB(r: a.r + (b.r - a.r) * t,
-                   g: a.g + (b.g - a.g) * t,
-                   b: a.b + (b.b - a.b) * t)
+        return RGB(
+            r: a.r + (b.r - a.r) * t,
+            g: a.g + (b.g - a.g) * t,
+            b: a.b + (b.b - a.b) * t
+        )
     }
-    private func clampRGB(_ c: RGB) -> RGB { RGB(r: clamp(c.r, 0, 1), g: clamp(c.g, 0, 1), b: clamp(c.b, 0, 1)) }
+
+    private func clampRGB(_ c: RGB) -> RGB {
+        RGB(r: clamp(c.r, 0, 1), g: clamp(c.g, 0, 1), b: clamp(c.b, 0, 1))
+    }
+
     private func smoothstep(edge0: CGFloat, edge1: CGFloat, value: CGFloat) -> CGFloat {
         guard edge1 > edge0 else { return value >= edge1 ? 1 : 0 }
         let t = clamp((value - edge0) / (edge1 - edge0), 0, 1)
         return t * t * (3 - 2 * t)
     }
-    private func clamp(_ value: CGFloat, _ low: CGFloat, _ high: CGFloat) -> CGFloat { min(high, max(low, value)) }
-    private func write(_ c: RGB, to out: inout [UInt8], offset: Int) {
-        out[offset] = byte(c.r); out[offset + 1] = byte(c.g); out[offset + 2] = byte(c.b); out[offset + 3] = 255
+
+    private func clamp(_ value: CGFloat, _ low: CGFloat, _ high: CGFloat) -> CGFloat {
+        min(high, max(low, value))
     }
-    private func byte(_ v: CGFloat) -> UInt8 { UInt8(clamping: Int(clamp(v, 0, 1) * 255 + 0.5)) }
+
+    private func write(_ c: RGB, to out: inout [UInt8], offset: Int) {
+        out[offset] = byte(c.r)
+        out[offset + 1] = byte(c.g)
+        out[offset + 2] = byte(c.b)
+        out[offset + 3] = 255
+    }
+
+    private func byte(_ v: CGFloat) -> UInt8 {
+        UInt8(clamping: Int(clamp(v, 0, 1) * 255 + 0.5))
+    }
 }
