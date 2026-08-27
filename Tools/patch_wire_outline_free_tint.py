@@ -62,14 +62,15 @@ ui = ui.replace(
     "logoShadows: false",
 )
 
-# Build-generation token: installing over an old IPA preserves settings, so keep a source-level
-# generation marker available for preview invalidation/debugging.
-if "oit.tintRendererGeneration.20260827.nooutline.v2" not in ui:
+# Build-generation token: NoRim-3 uses strict binary final geometry. Installing over an old IPA
+# preserves settings, so bump the source generation marker to make the new render generation easy
+# to distinguish from retained state.
+if "oit.tintRendererGeneration.20260827.nooutline.v3" not in ui:
     marker = "private let liquidPreviewTicker = Timer.publish(every: 0.10, on: .main, in: .common).autoconnect()\n"
     if marker in ui:
         ui = ui.replace(
             marker,
-            marker + 'private let oitTintRendererGeneration = "oit.tintRendererGeneration.20260827.nooutline.v2"\n',
+            marker + 'private let oitTintRendererGeneration = "oit.tintRendererGeneration.20260827.nooutline.v3"\n',
             1,
         )
 
@@ -86,4 +87,4 @@ if "let outlineFreeAdvanced = snapshot.resolvedMode == .tint && snapshot.tintVar
     raise SystemExit("wire-outline-free: Tint+ shadow-bypass guard missing")
 
 ui_path.write_text(ui, encoding="utf-8")
-print("OutlineFree Tint+ wiring verified: already-wired state accepted, no rendered bitmap argument, silhouette shadows bypassed")
+print("OutlineFree Tint+ NoRim-3 wiring verified: strict binary geometry, no rendered bitmap argument, silhouette shadows bypassed")
