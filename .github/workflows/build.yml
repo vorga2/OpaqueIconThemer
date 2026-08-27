@@ -42,6 +42,9 @@ jobs:
       - name: Restrict Apple Mono shadows to interior
         run: python3 Tools/patch_mono_shadow_interior_only.py
 
+      - name: Keep Tint+ strength on fill only
+        run: python3 Tools/patch_tint_strength_fill_only.py
+
       - name: Generate project
         run: xcodegen generate
 
