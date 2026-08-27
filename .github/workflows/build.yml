@@ -27,6 +27,9 @@ jobs:
       - name: Apply Apple Mono multilayer depth
         run: python3 Tools/patch_apple_mono_depth.py
 
+      - name: Keep Apple Mono logo fill white
+        run: python3 Tools/patch_apple_mono_white_fill.py
+
       - name: Generate project
         run: xcodegen generate
 
