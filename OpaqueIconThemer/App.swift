@@ -6,7 +6,7 @@ struct OpaqueIconThemerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            LiquidContentView()
                 .environmentObject(store)
         }
     }
