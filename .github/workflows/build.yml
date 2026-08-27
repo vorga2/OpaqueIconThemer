@@ -63,6 +63,9 @@ jobs:
       - name: Apply Tint+ NoRim-4 final material pipeline
         run: python3 Tools/patch_tint_v4_no_rim_custom_gradient.py
 
+      - name: Fix Smart Logo tint edge and add gradient toggle
+        run: python3 Tools/patch_smart_logo_no_rim_gradient_toggle.py
+
       - name: Generate project
         run: xcodegen generate
 
