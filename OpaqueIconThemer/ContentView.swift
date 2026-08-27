@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import UIKit
 import FamilyControls
@@ -213,57 +214,97 @@ private struct AppTintView: View {
     let app: InstalledAppInfo
 
     @State private var tintColor: Color = .blue
+    @State private var iconTintColor: Color = .blue
     @State private var mode: IconRenderMode = .auto
-    @State private var tintIntensity = 0.88
-    @State private var backgroundIntensity = 0.72
-    @State private var gradientStart = 0.50
-    @State private var gradientStrength = 0.16
+    @State private var tintIntensity: Double = 0.88
+    @State private var backgroundIntensity: Double = 0.72
+    @State private var gradientStart: Double = 0.0
+    @State private var gradientStrength: Double = 0.45
+    @State private var autoResolvedMode: IconRenderMode = .tint
+    @State private var previewIcon: UIImage?
     @StateObject private var shortcutHelper = ShortcutHelper()
 
-    private var resolvedMode: IconRenderMode? {
-        guard let source = app.icon else { return nil }
-        return IconStyleRenderer.shared.resolvedMode(source: source, requested: mode)
+    private var resolvedMode: IconRenderMode {
+        switch mode {
+        case .auto:
+            return autoResolvedMode
+        case .smartLogo:
+            return .smartLogo
+        case .tint:
+            return .tint
+        }
     }
 
-    private var tintedIcon: UIImage? {
+    private var backgroundColorKey: String {
+        UIColor(tintColor).description
+    }
+
+    private var iconColorKey: String {
+        UIColor(iconTintColor).description
+    }
+
+    private func renderCurrentIcon() -> UIImage? {
         guard let source = app.icon else { return nil }
         let renderer = ReferenceAppleMonotoneRenderer.shared
-        let uiTint = UIColor(tintColor)
+        let backgroundTint = UIColor(tintColor)
+        let iconTint = UIColor(iconTintColor)
 
-        let base: UIImage?
         if resolvedMode == .smartLogo {
-            base = renderer.renderSmartLogo(
+            let base = renderer.renderSmartLogo(
                 source: source,
-                tint: uiTint,
-                gradientStart: gradientStart,
-                gradientStrength: gradientStrength
+                tint: backgroundTint,
+                gradientStart: CGFloat(gradientStart),
+                gradientStrength: CGFloat(gradientStrength)
             ) ?? renderer.renderTintedBitmap(
                 source: source,
-                tint: uiTint,
-                intensity: tintIntensity
+                tint: iconTint,
+                intensity: CGFloat(tintIntensity)
             )
-        } else {
-            base = renderer.renderTintedBitmap(
+
+            guard let base else { return nil }
+            return BackgroundIntensityProcessor.shared.apply(
                 source: source,
-                tint: uiTint,
-                intensity: tintIntensity
-            )
+                rendered: base,
+                tint: backgroundTint,
+                intensity: CGFloat(backgroundIntensity)
+            ) ?? base
         }
 
-        guard let base else { return nil }
-        return BackgroundIntensityProcessor.shared.apply(
+        guard let base = renderer.renderTintedBitmap(
+            source: source,
+            tint: iconTint,
+            intensity: CGFloat(tintIntensity)
+        ) else {
+            return nil
+        }
+
+        return CombinedTintIntensityProcessor.shared.apply(
             source: source,
             rendered: base,
-            tint: uiTint,
-            intensity: backgroundIntensity
+            backgroundTint: backgroundTint,
+            iconTint: iconTint,
+            backgroundIntensity: CGFloat(backgroundIntensity),
+            iconIntensity: CGFloat(tintIntensity)
         ) ?? base
+    }
+
+    private func refreshPreview() {
+        previewIcon = renderCurrentIcon()
+    }
+
+    private func sliderEditingChanged(_ editing: Bool) {
+        // Heavy 512px segmentation/rendering is intentionally deferred until finger-up.
+        // The slider and percentage text therefore stay smooth while dragging.
+        if !editing {
+            refreshPreview()
+        }
     }
 
     private var resultTitle: String {
         switch resolvedMode {
         case .smartLogo: return "Apple Mono"
         case .tint: return "Apple Tint"
-        default: return "Результат"
+        case .auto: return "Результат"
         }
     }
 
@@ -278,8 +319,11 @@ private struct AppTintView: View {
                     HStack(spacing: 22) {
                         preview(image: source, title: "Оригинал")
 
-                        if let tintedIcon {
-                            preview(image: tintedIcon, title: resultTitle)
+                        if let previewIcon {
+                            preview(image: previewIcon, title: resultTitle)
+                        } else {
+                            ProgressView()
+                                .frame(width: 92, height: 92)
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -294,7 +338,7 @@ private struct AppTintView: View {
                     }
                     .pickerStyle(.segmented)
 
-                    if mode == .auto, let resolvedMode {
+                    if mode == .auto {
                         HStack {
                             Text("Авто выбрало")
                             Spacer()
@@ -312,7 +356,11 @@ private struct AppTintView: View {
                 }
 
                 Section {
-                    ColorPicker("Цвет", selection: $tintColor, supportsOpacity: false)
+                    ColorPicker("Цвет фона", selection: $tintColor, supportsOpacity: false)
+
+                    if resolvedMode == .tint {
+                        ColorPicker("Цвет иконки", selection: $iconTintColor, supportsOpacity: false)
+                    }
 
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -321,10 +369,14 @@ private struct AppTintView: View {
                             Text("\(Int(backgroundIntensity * 100))%")
                                 .foregroundStyle(.secondary)
                         }
-                        Slider(value: $backgroundIntensity, in: 0.0...1.0)
+                        AdaptiveSlider(
+                            value: $backgroundIntensity,
+                            range: 0.0...1.0,
+                            onEditingChanged: sliderEditingChanged
+                        )
                     }
 
-                    if mode != .smartLogo {
+                    if resolvedMode == .tint {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text("Сила тинта")
@@ -332,16 +384,24 @@ private struct AppTintView: View {
                                 Text("\(Int(tintIntensity * 100))%")
                                     .foregroundStyle(.secondary)
                             }
-                            Slider(value: $tintIntensity, in: 0.20...1.0)
+                            AdaptiveSlider(
+                                value: $tintIntensity,
+                                range: 0.0...1.0,
+                                onEditingChanged: sliderEditingChanged
+                            )
                         }
                     }
                 } header: {
                     Text("Цвет")
                 } footer: {
-                    Text("«Интенсивность фона» отдельно усиливает выбранный цвет именно в фоне и работает одинаково для «Логотипа», «Тинта» и «Авто». 0% — без дополнительного усиления, 100% — максимально глубокий и насыщенный фон.")
+                    if resolvedMode == .tint {
+                        Text("Сила тинта и интенсивность фона считаются одновременно. Если оба цвета одинаковые и оба значения 100%, итоговая иконка становится полностью этим цветом. Цвет иконки можно менять отдельно от цвета фона.")
+                    } else {
+                        Text("Интенсивность фона усиливает выбранный цвет только в фоне, не ломая Mono-слои логотипа.")
+                    }
                 }
 
-                if mode != .tint {
+                if resolvedMode == .smartLogo {
                     Section {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
@@ -350,7 +410,11 @@ private struct AppTintView: View {
                                 Text("\(Int(gradientStart * 100))%")
                                     .foregroundStyle(.secondary)
                             }
-                            Slider(value: $gradientStart, in: 0.20...0.80)
+                            AdaptiveSlider(
+                                value: $gradientStart,
+                                range: 0.0...0.80,
+                                onEditingChanged: sliderEditingChanged
+                            )
                         }
 
                         VStack(alignment: .leading, spacing: 8) {
@@ -360,20 +424,25 @@ private struct AppTintView: View {
                                 Text("\(Int(gradientStrength * 100))%")
                                     .foregroundStyle(.secondary)
                             }
-                            Slider(value: $gradientStrength, in: 0.0...0.45)
+                            AdaptiveSlider(
+                                value: $gradientStrength,
+                                range: 0.0...0.45,
+                                onEditingChanged: sliderEditingChanged
+                            )
                         }
                     } header: {
                         Text("Градиент логотипа")
                     } footer: {
-                        Text("Mono-форма считается в linear-light: верх остаётся белым, ниже выбранной точки мягко добавляется выбранный цвет. Полупрозрачность и антиалиасинг деталей сохраняются в композите, но итоговая PNG полностью непрозрачная.")
+                        Text("По умолчанию: начало 0%, интенсивность 45%. Mono-форма считается в linear-light, полупрозрачность и антиалиасинг деталей сохраняются в композите, а итоговая PNG полностью непрозрачная.")
                     }
                 }
 
                 Section {
                     Button {
-                        guard let tintedIcon else { return }
+                        guard let finalIcon = renderCurrentIcon() else { return }
+                        previewIcon = finalIcon
                         shortcutHelper.generateReadyShortcut(
-                            tintedIcon,
+                            finalIcon,
                             appName: app.displayName,
                             bundleIdentifier: app.bundleIdentifier
                         )
@@ -419,6 +488,23 @@ private struct AppTintView: View {
         }
         .navigationTitle(app.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if let source = app.icon {
+                autoResolvedMode = IconStyleRenderer.shared.resolvedMode(source: source, requested: .auto)
+            }
+            refreshPreview()
+        }
+        .onChange(of: mode) { _ in
+            refreshPreview()
+        }
+        .onChange(of: backgroundColorKey) { _ in
+            refreshPreview()
+        }
+        .onChange(of: iconColorKey) { _ in
+            if resolvedMode == .tint {
+                refreshPreview()
+            }
+        }
     }
 
     private var modeDescription: String {
@@ -428,7 +514,7 @@ private struct AppTintView: View {
         case .smartLogo:
             return "Сегментирует главный знак мягкой маской, сохраняет alpha/антиалиасинг и тональный объём, считает luminance в linear-light sRGB и делает фон полностью непрозрачным."
         case .tint:
-            return "Для игр и детализированных иконок: без вырезания формы, вся картинка переводится в linear-light двухточечный tint с сохранением светотеневой структуры."
+            return "Для игр и детализированных иконок: фон и детали управляются раздельно. Сила тинта отвечает за элементы иконки, интенсивность фона — за фон; оба значения смешиваются в одном linear-light проходе."
         }
     }
 
