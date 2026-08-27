@@ -215,6 +215,7 @@ private struct AppTintView: View {
     @State private var tintColor: Color = .blue
     @State private var mode: IconRenderMode = .auto
     @State private var tintIntensity = 0.88
+    @State private var backgroundIntensity = 0.72
     @State private var gradientStart = 0.50
     @State private var gradientStrength = 0.16
     @StateObject private var shortcutHelper = ShortcutHelper()
@@ -229,8 +230,9 @@ private struct AppTintView: View {
         let renderer = ReferenceAppleMonotoneRenderer.shared
         let uiTint = UIColor(tintColor)
 
+        let base: UIImage?
         if resolvedMode == .smartLogo {
-            return renderer.renderSmartLogo(
+            base = renderer.renderSmartLogo(
                 source: source,
                 tint: uiTint,
                 gradientStart: gradientStart,
@@ -240,13 +242,21 @@ private struct AppTintView: View {
                 tint: uiTint,
                 intensity: tintIntensity
             )
+        } else {
+            base = renderer.renderTintedBitmap(
+                source: source,
+                tint: uiTint,
+                intensity: tintIntensity
+            )
         }
 
-        return renderer.renderTintedBitmap(
+        guard let base else { return nil }
+        return BackgroundIntensityProcessor.shared.apply(
             source: source,
+            rendered: base,
             tint: uiTint,
-            intensity: tintIntensity
-        )
+            intensity: backgroundIntensity
+        ) ?? base
     }
 
     private var resultTitle: String {
@@ -301,8 +311,18 @@ private struct AppTintView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Цвет") {
+                Section {
                     ColorPicker("Цвет", selection: $tintColor, supportsOpacity: false)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Интенсивность фона")
+                            Spacer()
+                            Text("\(Int(backgroundIntensity * 100))%")
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $backgroundIntensity, in: 0.0...1.0)
+                    }
 
                     if mode != .smartLogo {
                         VStack(alignment: .leading, spacing: 8) {
@@ -315,6 +335,10 @@ private struct AppTintView: View {
                             Slider(value: $tintIntensity, in: 0.20...1.0)
                         }
                     }
+                } header: {
+                    Text("Цвет")
+                } footer: {
+                    Text("«Интенсивность фона» отдельно усиливает выбранный цвет именно в фоне и работает одинаково для «Логотипа», «Тинта» и «Авто». 0% — без дополнительного усиления, 100% — максимально глубокий и насыщенный фон.")
                 }
 
                 if mode != .tint {
