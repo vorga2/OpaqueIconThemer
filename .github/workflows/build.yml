@@ -84,6 +84,9 @@ jobs:
       - name: Add App Store ready-app browser
         run: python3 Tools/patch_appstore_browser.py
 
+      - name: Fix live App Store icons and force UK catalog
+        run: python3 Tools/patch_appstore_live_icon_refresh.py
+
       - name: Generate project
         run: xcodegen generate
 
