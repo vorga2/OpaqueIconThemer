@@ -60,6 +60,9 @@ jobs:
       - name: Verify outline-free Tint+ is the runtime renderer
         run: python3 Tools/patch_wire_outline_free_tint.py
 
+      - name: Apply Tint+ NoRim-4 final material pipeline
+        run: python3 Tools/patch_tint_v4_no_rim_custom_gradient.py
+
       - name: Generate project
         run: xcodegen generate
 
