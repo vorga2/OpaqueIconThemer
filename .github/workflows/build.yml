@@ -48,6 +48,9 @@ jobs:
       - name: Lock Tint+ geometry to the detected mask
         run: python3 Tools/patch_tint_strength_geometry_lock.py
 
+      - name: Fix Tint+ background edge and add icon gradient
+        run: python3 Tools/patch_tint_background_edge_gradient.py
+
       - name: Generate project
         run: xcodegen generate
 
