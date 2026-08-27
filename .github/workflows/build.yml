@@ -39,6 +39,9 @@ jobs:
       - name: Remove remaining Apple Mono rim at source
         run: python3 Tools/patch_mono_true_no_rim.py
 
+      - name: Restrict Apple Mono shadows to interior
+        run: python3 Tools/patch_mono_shadow_interior_only.py
+
       - name: Generate project
         run: xcodegen generate
 
