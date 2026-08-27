@@ -78,6 +78,9 @@ jobs:
       - name: Restore visible foreground form shadows
         run: python3 Tools/patch_foreground_form_shadows.py
 
+      - name: Apply requested default preset and Simple Tint rules
+        run: python3 Tools/patch_default_preset_simple_global_tint.py
+
       - name: Generate project
         run: xcodegen generate
 
