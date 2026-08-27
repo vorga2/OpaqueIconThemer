@@ -1,13 +1,11 @@
 import Foundation
 import UIKit
 
-/// Static shadow/bevel post-process for generated opaque icons.
+/// Shadow/bevel post-process for the foreground artwork only.
 ///
-/// It intentionally keeps the final bitmap fully opaque. The defaults approximate the material
-/// hierarchy used by iOS-style icon artwork: top highlight, lower/side inner shade, ambient edge
-/// depth, contact/ambient logo shadows, a small logo bevel and a directional perimeter highlight.
-/// Shadow color is black by default, but callers can supply any color. A small surface-color mix
-/// keeps shadows material-looking instead of dirty neutral black.
+/// Important: this processor must never shade the outer tile/background or bake a perimeter
+/// shadow/highlight into the square PNG. It only adds depth around the detected foreground logo,
+/// while keeping the final bitmap fully opaque.
 final class IconShadowProcessor {
     static let shared = IconShadowProcessor()
 
@@ -42,7 +40,7 @@ final class IconShadowProcessor {
         logoShadows: Bool = true
     ) -> UIImage? {
         let amount = clamp(strength, 0, 1.5)
-        guard amount > 0.001 else { return rendered }
+        guard amount > 0.001, logoShadows else { return rendered }
 
         let width = 512
         let height = 512
@@ -55,29 +53,41 @@ final class IconShadowProcessor {
         let userShadow = rgb(from: shadowColor)
         let effectiveShadow = mix(userShadow, surface, amount: clamp(tintMix, 0, 1))
         let effectiveShadowLinear = srgbToLinear(effectiveShadow)
-        let topLight = mix(RGB(r: 1, g: 1, b: 1), surface, amount: 0.18)
-        let topLightLinear = srgbToLinear(topLight)
         let whiteLinear = RGB(r: 1, g: 1, b: 1)
 
-        var logoMask = logoShadows
-            ? inferredLogoMask(pixels: sourcePixels, width: width, height: height)
-            : [CGFloat](repeating: 0, count: width * height)
+        let logoMask = inferredLogoMask(pixels: sourcePixels, width: width, height: height)
+        let count = logoMask.reduce(0) { $0 + ($1 > 0.45 ? 1 : 0) }
+        let coverage = CGFloat(count) / CGFloat(max(1, width * height))
 
-        // If segmentation treats most of a complex/game icon as one foreground object, logo
-        // shadows would look artificial. Keep the tile material shadows but disable logo beveling.
-        if logoShadows {
-            let count = logoMask.reduce(0) { $0 + ($1 > 0.45 ? 1 : 0) }
-            let coverage = CGFloat(count) / CGFloat(max(1, width * height))
-            if coverage < 0.008 || coverage > 0.68 {
-                logoMask = [CGFloat](repeating: 0, count: width * height)
-            }
-        }
+        // On complex/full-art icons there may be no stable foreground object. In that case do
+        // nothing instead of creating fake shadows around the tile or along its sides.
+        guard coverage >= 0.008, coverage <= 0.68 else { return rendered }
 
         let designScale = CGFloat(width) / 180.0
-        let contactBlur = boxBlur(logoMask, width: width, height: height, radius: max(1, Int((4.0 * designScale).rounded())))
-        let ambientBlur = boxBlur(logoMask, width: width, height: height, radius: max(1, Int((10.0 * designScale).rounded())))
-        let innerBlur = boxBlur(logoMask, width: width, height: height, radius: max(1, Int((3.0 * designScale).rounded())))
-        let lightInnerBlur = boxBlur(logoMask, width: width, height: height, radius: max(1, Int((2.0 * designScale).rounded())))
+        let contactBlur = boxBlur(
+            logoMask,
+            width: width,
+            height: height,
+            radius: max(1, Int((4.0 * designScale).rounded()))
+        )
+        let ambientBlur = boxBlur(
+            logoMask,
+            width: width,
+            height: height,
+            radius: max(1, Int((10.0 * designScale).rounded()))
+        )
+        let innerBlur = boxBlur(
+            logoMask,
+            width: width,
+            height: height,
+            radius: max(1, Int((3.0 * designScale).rounded()))
+        )
+        let lightInnerBlur = boxBlur(
+            logoMask,
+            width: width,
+            height: height,
+            radius: max(1, Int((2.0 * designScale).rounded()))
+        )
 
         let contactOffset = max(1, Int((2.0 * designScale).rounded()))
         let ambientOffset = max(1, Int((5.0 * designScale).rounded()))
@@ -87,17 +97,9 @@ final class IconShadowProcessor {
         var output = renderedPixels
 
         for y in 0..<height {
-            let yNorm = CGFloat(y) / CGFloat(max(1, height - 1))
-            let dTop = CGFloat(y) / designScale
-            let dBottom = CGFloat(height - 1 - y) / designScale
-
             for x in 0..<width {
                 let i = y * width + x
                 let p = i * 4
-                let xNorm = CGFloat(x) / CGFloat(max(1, width - 1))
-                let dLeft = CGFloat(x) / designScale
-                let dRight = CGFloat(width - 1 - x) / designScale
-                let minEdge = min(min(dTop, dBottom), min(dLeft, dRight))
 
                 let renderedRGB = RGB(
                     r: CGFloat(renderedPixels[p]) / 255.0,
@@ -105,90 +107,56 @@ final class IconShadowProcessor {
                     b: CGFloat(renderedPixels[p + 2]) / 255.0
                 )
                 var result = srgbToLinear(renderedRGB)
-
-                // Background/tile material defaults, scaled from the ~180 px reference recipe.
-                let bottomInner = 0.35 * amount * gaussianEdge(distance: dBottom, offset: 5, blur: 14)
-                let topInner = 0.30 * amount * gaussianEdge(distance: dTop, offset: 2, blur: 7)
-                let rightSide = 0.14 * amount * gaussianEdge(distance: dRight, offset: 2, blur: 8)
-                let leftSide = 0.14 * 0.55 * amount * gaussianEdge(distance: dLeft, offset: 1, blur: 9)
-                let ambientInner = 0.12 * amount * gaussianEdge(distance: minEdge, offset: 0, blur: 22)
-
-                // True external shadows cannot live outside a fully opaque square PNG. Bake their
-                // perceptual contribution into the inner edge instead, with a deliberately reduced
-                // weight so the icon does not acquire a dirty frame.
-                let contactEdge = 0.25 * 0.34 * amount * gaussianEdge(distance: dBottom, offset: 1, blur: 4)
-                let ambientEdge = 0.15 * 0.30 * amount * gaussianEdge(distance: minEdge, offset: 0, blur: 18)
-
-                let darkWeight = clamp(
-                    bottomInner + rightSide + leftSide + ambientInner + contactEdge + ambientEdge,
-                    0,
-                    0.72
-                )
-                result = mix(result, effectiveShadowLinear, amount: darkWeight)
-
-                // Top-left light source: soft upper inner highlight, not a hard white outline.
-                let topDirection = 0.72 + 0.28 * (1 - xNorm)
-                result = screen(result, topLightLinear, amount: clamp(topInner * topDirection, 0, 0.48))
-
                 let logo = clamp(logoMask[i], 0, 1)
-                if logo > 0.0001 || !logoMask.isEmpty {
-                    // Contact shadow under the foreground object.
-                    let contact = sample(
-                        contactBlur,
-                        width: width,
-                        height: height,
-                        x: x,
-                        y: y - contactOffset
-                    )
-                    let ambient = sample(
-                        ambientBlur,
-                        width: width,
-                        height: height,
-                        x: x,
-                        y: y - ambientOffset
-                    )
-                    let outside = 1 - logo
-                    let logoDrop = outside * amount * (contact * 0.30 + ambient * 0.12)
-                    if logoDrop > 0.0001 {
-                        result = mix(result, effectiveShadowLinear, amount: clamp(logoDrop, 0, 0.48))
-                    }
 
-                    if logo > 0.0001 {
-                        // Dark inner bevel on the lower/right-facing edge.
-                        let insideBelow = sample(
-                            innerBlur,
-                            width: width,
-                            height: height,
-                            x: x + darkInnerOffset,
-                            y: y + darkInnerOffset
-                        )
-                        let darkBevel = logo * (1 - insideBelow) * 0.18 * amount
-                        if darkBevel > 0.0001 {
-                            result = mix(result, effectiveShadowLinear, amount: clamp(darkBevel, 0, 0.26))
-                        }
-
-                        // White inner bevel on the upper/left-facing edge.
-                        let insideAbove = sample(
-                            lightInnerBlur,
-                            width: width,
-                            height: height,
-                            x: x - lightInnerOffset,
-                            y: y - lightInnerOffset
-                        )
-                        let lightBevel = logo * (1 - insideAbove) * 0.45 * amount
-                        if lightBevel > 0.0001 {
-                            result = screen(result, whiteLinear, amount: clamp(lightBevel, 0, 0.52))
-                        }
-                    }
+                // Drop/contact shadow belongs only to the detected foreground logo. The background
+                // itself is never darkened at the image borders or side edges.
+                let contact = sample(
+                    contactBlur,
+                    width: width,
+                    height: height,
+                    x: x,
+                    y: y - contactOffset
+                )
+                let ambient = sample(
+                    ambientBlur,
+                    width: width,
+                    height: height,
+                    x: x,
+                    y: y - ambientOffset
+                )
+                let outside = 1 - logo
+                let logoDrop = outside * amount * (contact * 0.30 + ambient * 0.12)
+                if logoDrop > 0.0001 {
+                    result = mix(result, effectiveShadowLinear, amount: clamp(logoDrop, 0, 0.48))
                 }
 
-                // Directional 1 px-design perimeter highlight: strongest top-left, very subtle at
-                // the bottom. This reads more naturally than a uniform stroke.
-                let border = 1 - smoothstep(edge0: 0.35, edge1: 1.85, value: minEdge)
-                if border > 0.0001 {
-                    let direction = clamp(0.92 - 0.50 * yNorm - 0.20 * xNorm, 0.18, 1)
-                    let strokeWeight = border * direction * 0.30 * amount
-                    result = screen(result, topLightLinear, amount: clamp(strokeWeight, 0, 0.38))
+                if logo > 0.0001 {
+                    // Dark inner bevel on the lower/right-facing edge of the foreground artwork.
+                    let insideBelow = sample(
+                        innerBlur,
+                        width: width,
+                        height: height,
+                        x: x + darkInnerOffset,
+                        y: y + darkInnerOffset
+                    )
+                    let darkBevel = logo * (1 - insideBelow) * 0.18 * amount
+                    if darkBevel > 0.0001 {
+                        result = mix(result, effectiveShadowLinear, amount: clamp(darkBevel, 0, 0.26))
+                    }
+
+                    // Small upper/left highlight on the foreground artwork itself.
+                    let insideAbove = sample(
+                        lightInnerBlur,
+                        width: width,
+                        height: height,
+                        x: x - lightInnerOffset,
+                        y: y - lightInnerOffset
+                    )
+                    let lightBevel = logo * (1 - insideAbove) * 0.45 * amount
+                    if lightBevel > 0.0001 {
+                        result = screen(result, whiteLinear, amount: clamp(lightBevel, 0, 0.52))
+                    }
                 }
 
                 let final = linearToSRGB(result)
@@ -239,7 +207,6 @@ final class IconShadowProcessor {
             mask[i] = confidence * alpha
         }
 
-        // Two light box passes remove threshold chatter while preserving antialiased coverage.
         mask = boxBlur(mask, width: width, height: height, radius: 1)
         mask = boxBlur(mask, width: width, height: height, radius: 1)
         return mask
@@ -314,7 +281,7 @@ final class IconShadowProcessor {
         return values[y * width + x]
     }
 
-    // MARK: - Background sampling
+    // MARK: - Background sampling for foreground detection only
 
     private func borderReferences(pixels: [UInt8], width: Int, height: Int) -> [RGB] {
         let radius = max(4, min(width, height) / 28)
@@ -371,12 +338,6 @@ final class IconShadowProcessor {
     }
 
     // MARK: - Color math
-
-    private func gaussianEdge(distance: CGFloat, offset: CGFloat, blur: CGFloat) -> CGFloat {
-        let d = max(0, distance - offset)
-        let sigma = max(0.001, blur * 0.52)
-        return exp(-(d * d) / (2 * sigma * sigma))
-    }
 
     private func oklab(_ rgb: RGB) -> Lab {
         let linear = srgbToLinear(rgb)
