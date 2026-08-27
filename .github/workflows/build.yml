@@ -15,6 +15,9 @@ jobs:
       - name: Install build tools
         run: brew install xcodegen dpkg
 
+      - name: Apply Liquid Glass UI fixes
+        run: python3 Tools/patch_liquid_ui_rounding_unified_tint.py
+
       - name: Generate project
         run: xcodegen generate
 
