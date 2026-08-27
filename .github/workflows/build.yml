@@ -51,6 +51,9 @@ jobs:
       - name: Fix Tint+ background edge and add icon gradient
         run: python3 Tools/patch_tint_background_edge_gradient.py
 
+      - name: Remove every remaining Tint+ rim source
+        run: python3 Tools/patch_remove_tint_rims.py
+
       - name: Generate project
         run: xcodegen generate
 
