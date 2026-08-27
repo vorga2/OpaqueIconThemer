@@ -1,0 +1,72 @@
+name: Patch gradient semantics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-gradient-semantics.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply exact 0-100 gradient semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path('OpaqueIconThemer/ReferenceAppleMonotoneRenderer.swift'): [
+                  ('let start = clamp(gradientStart, 0.05, 0.90)',
+                   'let start = clamp(gradientStart, 0.0, 1.0)'),
+                  ('let strength = clamp(gradientStrength, 0, 0.65)',
+                   'let strength = clamp(gradientStrength, 0.0, 1.0)'),
+              ],
+              Path('OpaqueIconThemer/AppleLikeLogoRenderer.swift'): [
+                  ('let start = min(0.92, max(0.05, gradientStart))',
+                   'let start = min(1.0, max(0.0, gradientStart))'),
+                  ('let strength = min(0.70, max(0, gradientStrength))',
+                   'let strength = min(1.0, max(0.0, gradientStrength))'),
+              ],
+              Path('OpaqueIconThemer/IconStyleRenderer.swift'): [
+                  ('var gradientStart: CGFloat = 0.50',
+                   'var gradientStart: CGFloat = 0.0'),
+                  ('var gradientStrength: CGFloat = 0.16',
+                   'var gradientStrength: CGFloat = 0.45'),
+              ],
+          }
+
+          for path, pairs in replacements.items():
+              text = path.read_text()
+              original = text
+              for old, new in pairs:
+                  if old in text:
+                      text = text.replace(old, new)
+                  elif new not in text:
+                      raise SystemExit(f'Expected pattern not found in {path}: {old}')
+              if text != original:
+                  path.write_text(text)
+          PY
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo 'No changes needed'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add OpaqueIconThemer/ReferenceAppleMonotoneRenderer.swift OpaqueIconThemer/AppleLikeLogoRenderer.swift OpaqueIconThemer/IconStyleRenderer.swift
+          git commit -m 'Make gradient controls map exactly from 0 to 100 percent'
+          git push origin HEAD:main
