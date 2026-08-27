@@ -33,6 +33,9 @@ jobs:
       - name: Remove Apple Mono outer gray outline
         run: python3 Tools/patch_mono_no_outline.py
 
+      - name: Keep Apple Mono outer edge clean white
+        run: python3 Tools/patch_mono_clean_outer_edge.py
+
       - name: Generate project
         run: xcodegen generate
 
