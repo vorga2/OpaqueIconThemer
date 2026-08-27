@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// Keeps the native iOS 18 slider untouched, while giving iOS 26/27 a lightweight
