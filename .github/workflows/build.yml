@@ -81,6 +81,9 @@ jobs:
       - name: Apply requested default preset and Simple Tint rules
         run: python3 Tools/patch_default_preset_simple_global_tint.py
 
+      - name: Add App Store ready-app browser
+        run: python3 Tools/patch_appstore_browser.py
+
       - name: Generate project
         run: xcodegen generate
 
