@@ -240,6 +240,10 @@ private struct AppTintView: View {
         let backgroundIntensity: CGFloat
         let gradientStart: CGFloat
         let gradientStrength: CGFloat
+        let shadowsEnabled: Bool
+        let shadowColor: UIColor
+        let shadowStrength: CGFloat
+        let shadowTintMix: CGFloat
     }
 
     @State private var tintColor: Color = .blue
@@ -250,6 +254,10 @@ private struct AppTintView: View {
     @State private var backgroundIntensity: Double = 0.72
     @State private var gradientStart: Double = 0.0
     @State private var gradientStrength: Double = 0.45
+    @State private var shadowsEnabled = true
+    @State private var shadowColor: Color = .black
+    @State private var shadowStrength: Double = 0.90
+    @State private var shadowTintMix: Double = 0.30
     @State private var autoResolvedMode: IconRenderMode = .tint
     @State private var previewIcon: UIImage?
     @State private var previewRevision = 1
@@ -276,6 +284,10 @@ private struct AppTintView: View {
         UIColor(iconTintColor).description
     }
 
+    private var shadowColorKey: String {
+        UIColor(shadowColor).description
+    }
+
     private func makeRenderSnapshot() -> RenderSnapshot? {
         guard let source = app.icon else { return nil }
         let backgroundTint = UIColor(tintColor)
@@ -298,12 +310,17 @@ private struct AppTintView: View {
             tintIntensity: CGFloat(tintIntensity),
             backgroundIntensity: CGFloat(backgroundIntensity),
             gradientStart: CGFloat(gradientStart),
-            gradientStrength: CGFloat(gradientStrength)
+            gradientStrength: CGFloat(gradientStrength),
+            shadowsEnabled: shadowsEnabled,
+            shadowColor: UIColor(shadowColor),
+            shadowStrength: CGFloat(shadowStrength),
+            shadowTintMix: CGFloat(shadowTintMix)
         )
     }
 
     private static func render(_ snapshot: RenderSnapshot) -> UIImage? {
         let renderer = ReferenceAppleMonotoneRenderer.shared
+        let baseOutput: UIImage?
 
         if snapshot.resolvedMode == .smartLogo {
             let base = renderer.renderSmartLogo(
@@ -318,30 +335,53 @@ private struct AppTintView: View {
             )
 
             guard let base else { return nil }
-            return BackgroundIntensityProcessor.shared.apply(
+            baseOutput = BackgroundIntensityProcessor.shared.apply(
                 source: snapshot.source,
                 rendered: base,
                 tint: snapshot.backgroundTint,
                 intensity: snapshot.backgroundIntensity
             ) ?? base
+        } else {
+            guard let base = renderer.renderTintedBitmap(
+                source: snapshot.source,
+                tint: snapshot.iconTint,
+                intensity: snapshot.tintIntensity
+            ) else {
+                return nil
+            }
+
+            baseOutput = CombinedTintIntensityProcessor.shared.apply(
+                source: snapshot.source,
+                rendered: base,
+                backgroundTint: snapshot.backgroundTint,
+                iconTint: snapshot.iconTint,
+                backgroundIntensity: snapshot.backgroundIntensity,
+                iconIntensity: snapshot.tintIntensity
+            ) ?? base
         }
 
-        guard let base = renderer.renderTintedBitmap(
-            source: snapshot.source,
-            tint: snapshot.iconTint,
-            intensity: snapshot.tintIntensity
-        ) else {
-            return nil
+        guard let baseOutput else { return nil }
+
+        // Preserve the normal-Tint contract: foreground 100% + background 100% with one color
+        // must stay an exactly solid selected-color icon. Shadows resume below 100%.
+        let preserveSolidTint = snapshot.resolvedMode == .tint &&
+            snapshot.tintVariant == .simple &&
+            snapshot.tintIntensity >= 0.999 &&
+            snapshot.backgroundIntensity >= 0.999
+
+        guard snapshot.shadowsEnabled && !preserveSolidTint else {
+            return baseOutput
         }
 
-        return CombinedTintIntensityProcessor.shared.apply(
+        return IconShadowProcessor.shared.apply(
             source: snapshot.source,
-            rendered: base,
-            backgroundTint: snapshot.backgroundTint,
-            iconTint: snapshot.iconTint,
-            backgroundIntensity: snapshot.backgroundIntensity,
-            iconIntensity: snapshot.tintIntensity
-        ) ?? base
+            rendered: baseOutput,
+            surfaceColor: snapshot.backgroundTint,
+            shadowColor: snapshot.shadowColor,
+            strength: snapshot.shadowStrength,
+            tintMix: snapshot.shadowTintMix,
+            logoShadows: snapshot.resolvedMode == .smartLogo || snapshot.tintVariant == .advanced
+        ) ?? baseOutput
     }
 
     private func renderCurrentIcon() -> UIImage? {
@@ -533,6 +573,46 @@ private struct AppTintView: View {
                 }
 
                 Section {
+                    Toggle("Тени", isOn: $shadowsEnabled)
+
+                    if shadowsEnabled {
+                        ColorPicker("Цвет тени", selection: $shadowColor, supportsOpacity: false)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Сила теней")
+                                Spacer()
+                                Text("\(Int(shadowStrength * 100))%")
+                                    .foregroundStyle(.secondary)
+                            }
+                            AdaptiveSlider(
+                                value: $shadowStrength,
+                                range: 0.0...1.0,
+                                onEditingChanged: sliderEditingChanged
+                            )
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Подкрашивание тени")
+                                Spacer()
+                                Text("\(Int(shadowTintMix * 100))%")
+                                    .foregroundStyle(.secondary)
+                            }
+                            AdaptiveSlider(
+                                value: $shadowTintMix,
+                                range: 0.0...1.0,
+                                onEditingChanged: sliderEditingChanged
+                            )
+                        }
+                    }
+                } header: {
+                    Text("Тени")
+                } footer: {
+                    Text("По умолчанию: чёрная тень, сила 90%, подкрашивание цветом поверхности 30%. Используются верхний внутренний свет, нижняя/боковая глубина, ambient, контактная тень, тени логотипа и направленный кант. При обычном Tint 100% + 100% тени отключаются автоматически, чтобы сохранить полностью одноцветный результат.")
+                }
+
+                Section {
                     Button {
                         guard let finalIcon = renderCurrentIcon() else { return }
                         previewIcon = finalIcon
@@ -617,6 +697,18 @@ private struct AppTintView: View {
             markPreviewDirty()
         }
         .onChange(of: gradientStrength) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: shadowsEnabled) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: shadowColorKey) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: shadowStrength) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: shadowTintMix) { _ in
             markPreviewDirty()
         }
     }
