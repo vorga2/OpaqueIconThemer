@@ -53,24 +53,11 @@ replace_once(
 "gradient description",
 )
 
-# After patch_tint_strength_fill_only.py the advanced branch uses a neutral bitmap plus the old
-# CombinedTintIntensityProcessor. Replace it with the decontaminating compositor. It reconstructs
-# the foreground colour at antialiased edges before applying the new background, so increasing
-# background intensity cannot leave the old white background baked around the logo.
+# Prior patches already turn the advanced branch into a neutral base. Replace only the actual
+# compositor call instead of matching the surrounding comments, because those comments have
+# changed several times while the render contract stayed the same.
 replace_once(
-'''        } else {
-            // Tint+ must not pre-tint the whole bitmap. A whole-image tint colours the soft
-            // antialias/fringe and any baked shadow before the layer mask is applied, which turns
-            // “Сила тинта” into a visible coloured halo around simple logos. Build a neutral,
-            // fully-opaque base first; the layer-aware combined pass below is the ONLY place where
-            // background/icon tint strength is applied.
-            guard let base = renderer.renderTintedBitmap(
-                source: snapshot.source,
-                tint: snapshot.iconTint,
-                intensity: 0.0
-            ) else { return nil }
-
-            baseOutput = CombinedTintIntensityProcessor.shared.apply(
+'''            baseOutput = CombinedTintIntensityProcessor.shared.apply(
                 source: snapshot.source,
                 rendered: base,
                 backgroundTint: snapshot.backgroundTint,
@@ -78,20 +65,8 @@ replace_once(
                 backgroundIntensity: snapshot.backgroundIntensity,
                 iconIntensity: snapshot.tintIntensity
             ) ?? base
-        }
 ''',
-'''        } else {
-            // Tint+ starts from a neutral copy. AdvancedTintCompositeProcessor owns the complete
-            // foreground/background composite, including AA edge decontamination. This prevents
-            // the original pale icon background from surviving as a white outline when
-            // “Интенсивность фона” is increased.
-            guard let base = renderer.renderTintedBitmap(
-                source: snapshot.source,
-                tint: snapshot.iconTint,
-                intensity: 0.0
-            ) else { return nil }
-
-            baseOutput = AdvancedTintCompositeProcessor.shared.apply(
+'''            baseOutput = AdvancedTintCompositeProcessor.shared.apply(
                 source: snapshot.source,
                 rendered: base,
                 backgroundTint: snapshot.backgroundTint,
@@ -101,9 +76,8 @@ replace_once(
                 gradientStart: snapshot.gradientStart,
                 gradientStrength: snapshot.gradientStrength
             ) ?? base
-        }
 ''',
-"advanced Tint render branch",
+"advanced Tint compositor call",
 )
 
 path.write_text(text, encoding="utf-8")
