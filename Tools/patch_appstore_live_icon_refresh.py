@@ -36,7 +36,6 @@ store = store.replace(
     '        let regions = ["gb", "us"]\n',
     1,
 )
-
 store_path.write_text(store, encoding="utf-8")
 
 provider_path = Path("OpaqueIconThemer/AppStoreArtworkProvider.swift")
@@ -49,7 +48,9 @@ provider = provider.replace(provider_old, provider_new, 1)
 provider_path.write_text(provider, encoding="utf-8")
 
 # -----------------------------------------------------------------------------
-# Force only the App Store row to rebuild once its placeholder becomes a real async thumbnail.
+# Force only the App Store NavigationLink row to rebuild once placeholder -> thumbnail happens.
+# Match the complete ForEach block so the modifier cannot accidentally attach to the search-clear
+# button (which has no `app` variable in scope).
 # -----------------------------------------------------------------------------
 ui_path = Path("OpaqueIconThemer/LiquidContentView.swift")
 ui = ui_path.read_text(encoding="utf-8")
@@ -59,15 +60,14 @@ if section_start < 0 or section_end < 0:
     raise SystemExit("App Store live refresh patch failed: App Store section not found")
 section = ui[section_start:section_end]
 
-old_row = '''                    .buttonStyle(.plain)\n'''
-new_row = '''                    .buttonStyle(.plain)\n                    .id(app.bundleIdentifier + (app.icon == nil ? ":placeholder" : ":thumbnail"))\n'''
+old_rows = '''                ForEach(appStore.displayedApps) { app in\n                    NavigationLink {\n                        LGLAppTintView(app: app)\n                    } label: {\n                        LGLGlassCard(cornerRadius: 24, interactive: true) {\n                            LGLAppRow(app: app)\n                        }\n                    }\n                    .buttonStyle(.plain)\n                }\n'''
+new_rows = '''                ForEach(appStore.displayedApps) { app in\n                    NavigationLink {\n                        LGLAppTintView(app: app)\n                    } label: {\n                        LGLGlassCard(cornerRadius: 24, interactive: true) {\n                            LGLAppRow(app: app)\n                        }\n                    }\n                    .buttonStyle(.plain)\n                    .id(app.bundleIdentifier + (app.icon == nil ? ":placeholder" : ":thumbnail"))\n                }\n'''
 if ":placeholder" not in section:
-    if old_row not in section:
-        raise SystemExit("App Store live refresh patch failed: App Store row marker not found")
-    section = section.replace(old_row, new_row, 1)
+    if old_rows not in section:
+        raise SystemExit("App Store live refresh patch failed: App Store ForEach row block not found")
+    section = section.replace(old_rows, new_rows, 1)
     ui = ui[:section_start] + section + ui[section_end:]
 
-# Make the chosen catalog explicit in the UI.
 ui = ui.replace(
     'LGLSectionTitle("App Store", symbol: "apple.logo")',
     'LGLSectionTitle("App Store · UK", symbol: "apple.logo")',
@@ -89,7 +89,7 @@ if 'let regions = ["GB", "US"]' not in provider:
     raise SystemExit("App Store patch verification failed: HD provider is not GB/US")
 if "Locale.current.region" in provider:
     raise SystemExit("App Store patch verification failed: HD provider still depends on device region")
-if ':placeholder' not in ui or ':thumbnail' not in ui:
+if ':placeholder' not in section or ':thumbnail' not in section:
     raise SystemExit("App Store patch verification failed: row identity marker missing")
 if 'App Store · UK' not in ui:
     raise SystemExit("App Store patch verification failed: UK UI marker missing")
