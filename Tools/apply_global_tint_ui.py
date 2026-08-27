@@ -3,152 +3,45 @@ from pathlib import Path
 path = Path("OpaqueIconThemer/LiquidContentView.swift")
 text = path.read_text(encoding="utf-8")
 
-old_segment = '''                .background {
-                    if selection == value {
-                        if #available(iOS 26.0, *) {
-                            Color.accentColor.opacity(0.13)
-                                .glassEffect(.regular.interactive(), in: .capsule)
-                        } else {
-                            Capsule().fill(.thinMaterial)
-                        }
-                    }
-                }
-'''
-new_segment = '''                .background {
-                    if selection == value {
-                        if #available(iOS 26.0, *) {
-                            Capsule(style: .continuous)
-                                .fill(Color.clear)
-                                .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
-                                .overlay {
-                                    Capsule(style: .continuous)
-                                        .fill(Color.accentColor.opacity(0.10))
-                                }
-                        } else {
-                            Capsule(style: .continuous).fill(.thinMaterial)
-                        }
-                    }
-                }
-                .clipShape(Capsule(style: .continuous))
-'''
-if old_segment not in text:
-    raise SystemExit("segmented-control block not found")
-text = text.replace(old_segment, new_segment, 1)
 
-old_color = '''    private var colorCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LGLSectionTitle("Цвет", symbol: "paintpalette")
-            LGLGlassCard {
-                VStack(spacing: 18) {
-                    ColorPicker(
-                        resolvedMode == .tint && tintVariant == .advanced ? "Цвет фона" : "Цвет тинта",
-                        selection: $tintColor,
-                        supportsOpacity: false
-                    )
-                    .font(.body.weight(.medium))
+def replace_once(old: str, new: str, label: str) -> None:
+    global text
+    if old not in text:
+        raise SystemExit(f"global tint patch failed: {label} marker not found")
+    text = text.replace(old, new, 1)
 
-                    if resolvedMode == .tint && tintVariant == .advanced {
-                        Divider().opacity(0.35)
-                        ColorPicker("Цвет иконки", selection: $iconTintColor, supportsOpacity: false)
-                            .font(.body.weight(.medium))
-                    }
 
-                    Divider().opacity(0.35)
-                    LGLSliderRow(
-                        title: "Интенсивность фона",
-                        value: $backgroundIntensity,
-                        range: 0...1,
-                        onEditingChanged: sliderEditingChanged
-                    )
+# The first Liquid UI patch already adds the "Редактировать общий тинт" switch and fixes the
+# selected capsule shape. This pass changes what unified mode actually does: a real whole-image
+# colorization instead of merely synchronizing the foreground/background strengths.
+replace_once(
+'''        let tintVariant: LGLTintVariant
+        let backgroundTint: UIColor
+''',
+'''        let tintVariant: LGLTintVariant
+        let globalTintEnabled: Bool
+        let backgroundTint: UIColor
+''',
+"RenderSnapshot global tint flag",
+)
 
-                    if resolvedMode == .tint {
-                        Divider().opacity(0.35)
-                        LGLSliderRow(
-                            title: "Сила тинта",
-                            value: $tintIntensity,
-                            range: 0...1,
-                            onEditingChanged: sliderEditingChanged
-                        )
-                    }
+replace_once(
+'''            source: source,
+            resolvedMode: resolvedMode,
+            tintVariant: tintVariant,
+            backgroundTint: backgroundTint,
+''',
+'''            source: source,
+            resolvedMode: resolvedMode,
+            tintVariant: tintVariant,
+            globalTintEnabled: unifiedSimpleTint,
+            backgroundTint: backgroundTint,
+''',
+"RenderSnapshot global tint value",
+)
 
-                    Text(colorDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-    }
-'''
-new_color = '''    private var colorCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LGLSectionTitle("Цвет", symbol: "paintpalette")
-            LGLGlassCard {
-                VStack(spacing: 18) {
-                    if resolvedMode == .tint && tintVariant == .simple {
-                        ColorPicker(
-                            "Общий тинт",
-                            selection: $tintColor,
-                            supportsOpacity: false
-                        )
-                        .font(.body.weight(.medium))
-
-                        Divider().opacity(0.35)
-                        LGLSliderRow(
-                            title: "Сила общего тинта",
-                            value: $tintIntensity,
-                            range: 0...1,
-                            onEditingChanged: sliderEditingChanged
-                        )
-                    } else {
-                        ColorPicker(
-                            resolvedMode == .tint && tintVariant == .advanced ? "Цвет фона" : "Цвет тинта",
-                            selection: $tintColor,
-                            supportsOpacity: false
-                        )
-                        .font(.body.weight(.medium))
-
-                        if resolvedMode == .tint && tintVariant == .advanced {
-                            Divider().opacity(0.35)
-                            ColorPicker("Цвет иконки", selection: $iconTintColor, supportsOpacity: false)
-                                .font(.body.weight(.medium))
-                        }
-
-                        Divider().opacity(0.35)
-                        LGLSliderRow(
-                            title: "Интенсивность фона",
-                            value: $backgroundIntensity,
-                            range: 0...1,
-                            onEditingChanged: sliderEditingChanged
-                        )
-
-                        if resolvedMode == .tint {
-                            Divider().opacity(0.35)
-                            LGLSliderRow(
-                                value: $tintIntensity,
-                                title: "Сила тинта",
-                                range: 0...1,
-                                onEditingChanged: sliderEditingChanged
-                            )
-                        }
-                    }
-
-                    Text(colorDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-    }
-'''
-# Fix accidental parameter ordering before inserting.
-new_color = new_color.replace('''LGLSliderRow(\n                                value: $tintIntensity,\n                                title: "Сила тинта",''', '''LGLSliderRow(\n                                title: "Сила тинта",\n                                value: $tintIntensity,''')
-if old_color not in text:
-    raise SystemExit("colorCard block not found")
-text = text.replace(old_color, new_color, 1)
-
-old_render = '''        } else {
+replace_once(
+'''        } else {
             guard let base = renderer.renderTintedBitmap(
                 source: snapshot.source,
                 tint: snapshot.iconTint,
@@ -164,22 +57,11 @@ old_render = '''        } else {
                 iconIntensity: snapshot.tintIntensity
             ) ?? base
         }
-
-        guard let baseOutput else { return nil }
-
-        let preserveSolidTint = snapshot.resolvedMode == .tint &&
-            snapshot.tintVariant == .simple &&
-            snapshot.tintIntensity >= 0.999 &&
-            snapshot.backgroundIntensity >= 0.999
-
-        guard snapshot.shadowsEnabled && !preserveSolidTint else {
-            return baseOutput
-        }
-'''
-new_render = '''        } else if snapshot.tintVariant == .simple {
-            // Simple Tint is a true whole-image colorization pass: no foreground/background split.
-            // Hue/saturation come from the selected color while source lightness stays intact,
-            // matching the classic LunaPic-style tint behavior even at 100%.
+''',
+'''        } else if snapshot.tintVariant == .simple && snapshot.globalTintEnabled {
+            // LunaPic-style whole-image tint: no foreground/background segmentation.
+            // Hue and saturation come from the selected color while source lightness is preserved,
+            // so 100% still keeps white highlights, dark shadows and internal relief.
             baseOutput = GlobalColorTintProcessor.shared.apply(
                 source: snapshot.source,
                 tint: snapshot.backgroundTint,
@@ -201,34 +83,58 @@ new_render = '''        } else if snapshot.tintVariant == .simple {
                 iconIntensity: snapshot.tintIntensity
             ) ?? base
         }
-
-        guard let baseOutput else { return nil }
-
-        // A 100% global tint must still retain the source luminance/relief. Do not collapse it to
-        // one flat RGB value; only the separate advanced mode uses foreground/background masks.
-        guard snapshot.shadowsEnabled else {
-            return baseOutput
-        }
-'''
-if old_render not in text:
-    raise SystemExit("render block not found")
-text = text.replace(old_render, new_render, 1)
-
-text = text.replace(
-    'case .tint: return tintVariant == .advanced ? "Apple Tint+" : "Apple Tint"',
-    'case .tint: return tintVariant == .advanced ? "Apple Tint+" : "Общий Tint"',
-    1,
+''',
+"global tint render path",
 )
-text = text.replace(
-    ': "Обычный Tint: один цвет для всей иконки с раздельной силой фона и тинта."',
-    ': "Общий Tint: один цвет применяется ко всей картинке без разделения на фон и элементы; светлота, тени и объём исходника сохраняются."',
-    1,
+
+replace_once(
+'''        let preserveSolidTint = snapshot.resolvedMode == .tint &&
+            snapshot.tintVariant == .simple &&
+            snapshot.tintIntensity >= 0.999 &&
+            snapshot.backgroundIntensity >= 0.999
+''',
+'''        let preserveSolidTint = snapshot.resolvedMode == .tint &&
+            snapshot.tintVariant == .simple &&
+            !snapshot.globalTintEnabled &&
+            snapshot.tintIntensity >= 0.999 &&
+            snapshot.backgroundIntensity >= 0.999
+''',
+"do not flatten global tint at 100 percent",
 )
-text = text.replace(
-    'return "При 100% + 100% обычный Tint становится ровно выбранным цветом."',
-    'return "Как Color Tint в LunaPic: выбранный оттенок применяется ко всей иконке, но белые блики, тёмные тени и внутренний рельеф сохраняются даже при 100%."',
-    1,
+
+replace_once(
+'''        case .tint: return tintVariant == .advanced ? "Apple Tint+" : "Apple Tint"
+''',
+'''        case .tint:
+            if tintVariant == .advanced { return "Apple Tint+" }
+            return editUnifiedTint ? "Общий Tint" : "Apple Tint"
+''',
+"preview title",
+)
+
+replace_once(
+'''                : (editUnifiedTint
+                    ? "Обычный Tint: общий цвет и одна общая интенсивность одновременно управляют фоном и элементами."
+                    : "Обычный Tint: один цвет, но силу фона и элементов можно править раздельно.")
+''',
+'''                : (editUnifiedTint
+                    ? "Общий Tint как в LunaPic: один оттенок красит всю картинку целиком без разделения на фон и элементы, сохраняя светлоту, блики, тени и объём."
+                    : "Обычный Tint: один цвет, но силу фона и элементов можно править раздельно.")
+''',
+"mode description global tint",
+)
+
+replace_once(
+'''            return editUnifiedTint
+                ? "Общий тинт синхронно меняет цвет и интенсивность фона и элементов — без раздельной настройки."
+                : "Раздельный режим оставляет один цвет, но позволяет отдельно настроить фон и элементы."
+''',
+'''            return editUnifiedTint
+                ? "Как Color Tint в LunaPic: оттенок применяется ко всей иконке. При 100% белые детали остаются светлыми, тёмные — тёмными, поэтому рельеф не превращается в плоскую заливку."
+                : "Раздельный режим оставляет один цвет, но позволяет отдельно настроить фон и элементы."
+''',
+"color description global tint",
 )
 
 path.write_text(text, encoding="utf-8")
-print("Applied global tint UI + capsule selection fixes")
+print("LunaPic-style global tint render path applied")
