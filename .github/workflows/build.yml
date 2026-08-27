@@ -69,6 +69,9 @@ jobs:
       - name: Apply Smart Logo NR2 and refine Tint+ background detection
         run: python3 Tools/patch_smart_logo_v2_and_tint_bg_refine.py
 
+      - name: Restore Tint shadows, add background gradient and 60Hz preview
+        run: python3 Tools/patch_tint_shadows_bg_gradient_preview60_smart_v3.py
+
       - name: Generate project
         run: xcodegen generate
 
