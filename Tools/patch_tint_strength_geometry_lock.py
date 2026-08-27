@@ -44,17 +44,19 @@ old = '''        for i in 0..<(width * height) {
         }
 '''
 
-new = '''        for i in 0..<(width * height) {
-            let p = i * 4
+new = '''        // The permissive layer-aware mask is good for finding faint nested artwork, but its
+        // low-confidence outside fringe must not participate in Tint+ colour strength. Convert it
+        // into a fixed geometry map first. Exterior-connected fringe is clipped; enclosed weak
+        // material remains available for Settings/Photos-style internal layers.
+        let lockedForeground = TintForegroundGeometry.shared.lockedCoverage(
+            softMask: foregroundMask,
+            width: width,
+            height: height
+        )
 
-            // IMPORTANT: mask geometry must be completely independent from both sliders.
-            // Previously fgStrength multiplied the soft foreground mask itself. Increasing
-            // “Сила тинта” therefore made low-confidence AA/fringe pixels progressively visible,
-            // so the logo looked like it grew into neighbouring pixels. Build one fixed coverage
-            // curve once, then use strength only to change the MATERIAL COLOR inside that geometry.
-            let rawForeground = clamp(foregroundMask[i], 0, 1)
-            let fixedT = clamp((rawForeground - 0.10) / 0.80, 0, 1)
-            let foregroundCoverage = fixedT * fixedT * (3 - 2 * fixedT)
+        for i in 0..<(width * height) {
+            let p = i * 4
+            let foregroundCoverage = clamp(lockedForeground[i], 0, 1)
 
             let renderedRGB = RGB(
                 r: CGFloat(renderedPixels[p]) / 255.0,
@@ -63,8 +65,9 @@ new = '''        for i in 0..<(width * height) {
             )
             let renderedLinear = srgbToLinear(renderedRGB)
 
-            // Strength changes colour, never opacity/coverage. At an AA edge the same fixed
-            // foregroundCoverage is used at 0%, 50% and 100%, so the silhouette cannot expand.
+            // Slider strength changes MATERIAL COLOR only. Coverage is fixed above and therefore
+            // identical at 0%, 50% and 100%. Pixels outside the strict silhouette never receive
+            // icon tint, so the edge cannot grow into neighbouring background as strength rises.
             let backgroundMaterial = mix(
                 renderedLinear,
                 bgTintLinear,
@@ -95,4 +98,4 @@ if old not in text:
 
 text = text.replace(old, new, 1)
 path.write_text(text, encoding="utf-8")
-print("Tint+ geometry locked: strength changes color only, never mask coverage")
+print("Tint+ geometry locked with strict exterior clipping; strength cannot reveal neighbour fringe")
