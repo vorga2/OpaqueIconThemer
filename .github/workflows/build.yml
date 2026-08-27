@@ -72,6 +72,9 @@ jobs:
       - name: Restore Tint shadows, add background gradient and 60Hz preview
         run: python3 Tools/patch_tint_shadows_bg_gradient_preview60_smart_v3.py
 
+      - name: Apply fast live-preview source
+        run: python3 Tools/patch_fast_live_preview.py
+
       - name: Generate project
         run: xcodegen generate
 
