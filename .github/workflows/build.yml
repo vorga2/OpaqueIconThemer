@@ -57,6 +57,9 @@ jobs:
       - name: Force strict no-outline Tint+ final path
         run: python3 Tools/patch_force_outline_free_tint.py
 
+      - name: Verify outline-free Tint+ is the runtime renderer
+        run: python3 Tools/patch_wire_outline_free_tint.py
+
       - name: Generate project
         run: xcodegen generate
 
