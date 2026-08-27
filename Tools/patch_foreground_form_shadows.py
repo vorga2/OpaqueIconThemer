@@ -19,27 +19,17 @@ shadow = shadow_path.read_text(encoding="utf-8")
 shadow = shadow.replace("(4.0 * designScale)", "(5.0 * designScale)", 1)
 shadow = shadow.replace("(10.0 * designScale)", "(12.0 * designScale)", 1)
 
-old_offsets = '''        let contactOffset = max(1, Int((2.0 * designScale).rounded()))
-        let ambientOffset = max(1, Int((5.0 * designScale).rounded()))
-        let darkInnerOffset = max(1, Int((1.0 * designScale).rounded()))
-        let lightInnerOffset = max(1, Int((1.0 * designScale).rounded()))
-
-        var output = renderedPixels
-'''
-new_offsets = '''        let contactOffset = max(1, Int((2.0 * designScale).rounded()))
-        let ambientOffset = max(1, Int((5.0 * designScale).rounded()))
-        let darkInnerOffset = max(1, Int((1.0 * designScale).rounded()))
-        let lightInnerOffset = max(1, Int((1.0 * designScale).rounded()))
-
-        // Absolute guarantee requested by the UI: the outer app-icon tile must stay perfectly
-        // clean. Even if foreground detection touches a corner, no form shadow may be painted in
-        // this safety band, so there are never side/perimeter shadows around the square icon.
+# Insert independently from the exact offset block because earlier build patches may rewrite the
+# surrounding comments/spacing. The output marker is stable and immediately precedes the pixel pass.
+if "let tileSafetyInset" not in shadow:
+    output_marker = "        var output = renderedPixels\n"
+    safety = '''        // Keep the outer square app-icon tile perfectly clean. Foreground-form
+        // shadows are forcibly zero inside this perimeter band, so there can be no side shadow
+        // or drop shadow around the tile itself.
         let tileSafetyInset = max(4, Int((4.5 * designScale).rounded()))
 
-        var output = renderedPixels
 '''
-if "let tileSafetyInset" not in shadow:
-    shadow = replace_once(shadow, old_offsets, new_offsets, "tile safety inset")
+    shadow = replace_once(shadow, output_marker, safety + output_marker, "tile safety inset")
 
 old_drop = '''                let outside = 1 - logo
                 let logoDrop = outside * amount * (contact * 0.30 + ambient * 0.12)
@@ -53,9 +43,9 @@ new_drop = '''                let outside = 1 - logo
                     y < tileSafetyInset ||
                     y >= height - tileSafetyInset
 
-                // A soft unshifted halo makes the APP/LOGO FORM itself read clearly against the
-                // background. This is deliberately not a stroke: it is a blurred contact shadow.
-                // The two shifted terms then add the small 0/2/5 style depth used by iOS-like art.
+                // Visible shadow around the detected APP/LOGO FORM. This is a soft blurred
+                // contact shadow, not a stroke and not a silhouette bevel. The shifted terms add
+                // a small downward depth while the unshifted halo keeps the form readable.
                 let formHalo = contactBlur[i]
                 let formShadow = outside * amount * (
                     formHalo * 0.30 +
@@ -70,8 +60,8 @@ new_drop = '''                let outside = 1 - logo
 if "let formHalo = contactBlur[i]" not in shadow:
     shadow = replace_once(shadow, old_drop, new_drop, "foreground form shadow")
 
-# Keep the requested effect focused on the form shadow. The old bevel stays subtle and cannot
-# become an outline; the visible depth now comes primarily from the blurred shadow around the form.
+# Keep any existing internal bevel very subtle: the requested visible depth comes from the shadow
+# around the form, not from drawing an outline on the form itself.
 shadow = shadow.replace(
     "let darkBevel = logo * (1 - insideBelow) * 0.18 * amount",
     "let darkBevel = logo * (1 - insideBelow) * 0.10 * amount",
@@ -103,19 +93,29 @@ ui_path = Path("OpaqueIconThemer/LiquidContentView.swift")
 ui = ui_path.read_text(encoding="utf-8")
 
 # Shadows should work in ordinary Tint too, not only Smart Logo / Tint+.
-ui = ui.replace(
-    "logoShadows: snapshot.resolvedMode == .smartLogo || snapshot.tintVariant == .advanced",
-    "logoShadows: true",
-    1,
-)
+if "logoShadows: true" not in ui:
+    marker = "logoShadows: snapshot.resolvedMode == .smartLogo || snapshot.tintVariant == .advanced"
+    if marker in ui:
+        ui = ui.replace(marker, "logoShadows: true", 1)
+    else:
+        # Be resilient to line wrapping introduced by earlier runtime patches.
+        import re
+        ui, count = re.subn(
+            r"logoShadows:\s*snapshot\.resolvedMode\s*==\s*\.smartLogo\s*\|\|\s*snapshot\.tintVariant\s*==\s*\.advanced",
+            "logoShadows: true",
+            ui,
+            count=1,
+        )
+        if count == 0:
+            raise SystemExit("form-shadow runtime verification failed: logoShadows call marker missing")
 
 # If the user explicitly enabled Shadows, keep them visible even at Tint 100% + Background 100%.
-# This changes only foreground-form depth; the tile perimeter remains protected by the processor.
-ui = ui.replace(
-    "guard snapshot.shadowsEnabled && !preserveSolidTint else {",
-    "guard snapshot.shadowsEnabled else {",
-    1,
-)
+if "guard snapshot.shadowsEnabled else {" not in ui:
+    ui = ui.replace(
+        "guard snapshot.shadowsEnabled && !preserveSolidTint else {",
+        "guard snapshot.shadowsEnabled else {",
+        1,
+    )
 
 if "logoShadows: true" not in ui:
     raise SystemExit("form-shadow runtime verification failed: all-mode shadow wiring missing")
