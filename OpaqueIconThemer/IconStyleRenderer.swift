@@ -20,8 +20,8 @@ enum IconRenderMode: String, CaseIterable, Identifiable {
 struct IconRenderOptions {
     var mode: IconRenderMode = .auto
     var tintIntensity: CGFloat = 0.88
-    var gradientStart: CGFloat = 0.50
-    var gradientStrength: CGFloat = 0.16
+    var gradientStart: CGFloat = 0.0
+    var gradientStrength: CGFloat = 0.45
 }
 
 final class IconStyleRenderer {

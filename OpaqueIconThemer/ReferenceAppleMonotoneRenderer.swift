@@ -112,8 +112,8 @@ final class ReferenceAppleMonotoneRenderer {
         )
 
         let tintLinear = srgbToLinear(rgb(from: tint))
-        let start = clamp(gradientStart, 0.05, 0.90)
-        let strength = clamp(gradientStrength, 0, 0.65)
+        let start = clamp(gradientStart, 0.0, 1.0)
+        let strength = clamp(gradientStrength, 0.0, 1.0)
 
         // White Mono hierarchy in linear light. This retains relief/volume without preserving
         // the source hue. Highlights reach white; shadows remain bright like Apple's Mono art.

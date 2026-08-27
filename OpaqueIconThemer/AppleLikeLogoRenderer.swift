@@ -64,8 +64,8 @@ final class AppleLikeLogoRenderer {
 
         let tintSRGB = rgb(from: tint)
         let white = RGB(r: 1, g: 1, b: 1)
-        let start = min(0.92, max(0.05, gradientStart))
-        let strength = min(0.70, max(0, gradientStrength))
+        let start = min(1.0, max(0.0, gradientStart))
+        let strength = min(1.0, max(0.0, gradientStrength))
         var output = [UInt8](repeating: 0, count: stack.width * stack.height * 4)
 
         for y in 0..<stack.height {
