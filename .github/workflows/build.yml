@@ -75,6 +75,9 @@ jobs:
       - name: Apply fast live-preview source
         run: python3 Tools/patch_fast_live_preview.py
 
+      - name: Restore visible foreground form shadows
+        run: python3 Tools/patch_foreground_form_shadows.py
+
       - name: Generate project
         run: xcodegen generate
 
