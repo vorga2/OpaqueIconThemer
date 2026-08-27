@@ -11,6 +11,9 @@
 - Restore через удаление override.
 - Badge/accessory layer не изменяется.
 - Runtime fallback SBIconView / SBHIconView.
+- Apple-style Mono/Tint rendering с полностью непрозрачным итоговым фоном.
+- Настраиваемые Apple-style тени: чёрный цвет по умолчанию, изменение цвета, общая сила и подкрашивание цветом поверхности.
+- Встроены верхний внутренний свет, нижняя/боковая глубина, ambient/contact depth, тени и bevel логотипа и направленный светлый кант.
 - GitHub Actions собирает IPA + arm64/arm64e bridge dylib.
 
 Архитектура:
