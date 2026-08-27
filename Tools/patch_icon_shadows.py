@@ -1,0 +1,227 @@
+from pathlib import Path
+import re
+
+path = Path("OpaqueIconThemer/ContentView.swift")
+text = path.read_text()
+
+
+def replace_once(old: str, new: str, label: str) -> None:
+    global text
+    if old not in text:
+        if new in text:
+            return
+        raise SystemExit(f"missing {label}")
+    text = text.replace(old, new, 1)
+
+
+replace_once(
+    """        let gradientStart: CGFloat
+        let gradientStrength: CGFloat
+""",
+    """        let gradientStart: CGFloat
+        let gradientStrength: CGFloat
+        let shadowsEnabled: Bool
+        let shadowColor: UIColor
+        let shadowStrength: CGFloat
+        let shadowTintMix: CGFloat
+""",
+    "RenderSnapshot shadow fields",
+)
+
+replace_once(
+    """    @State private var gradientStart: Double = 0.0
+    @State private var gradientStrength: Double = 0.45
+""",
+    """    @State private var gradientStart: Double = 0.0
+    @State private var gradientStrength: Double = 0.45
+    @State private var shadowsEnabled = true
+    @State private var shadowColor: Color = .black
+    @State private var shadowStrength: Double = 0.90
+    @State private var shadowTintMix: Double = 0.30
+""",
+    "shadow states",
+)
+
+replace_once(
+    """    private var iconColorKey: String {
+        UIColor(iconTintColor).description
+    }
+""",
+    """    private var iconColorKey: String {
+        UIColor(iconTintColor).description
+    }
+
+    private var shadowColorKey: String {
+        UIColor(shadowColor).description
+    }
+""",
+    "shadow color key",
+)
+
+replace_once(
+    """            backgroundIntensity: CGFloat(backgroundIntensity),
+            gradientStart: CGFloat(gradientStart),
+            gradientStrength: CGFloat(gradientStrength)
+""",
+    """            backgroundIntensity: CGFloat(backgroundIntensity),
+            gradientStart: CGFloat(gradientStart),
+            gradientStrength: CGFloat(gradientStrength),
+            shadowsEnabled: shadowsEnabled,
+            shadowColor: UIColor(shadowColor),
+            shadowStrength: CGFloat(shadowStrength),
+            shadowTintMix: CGFloat(shadowTintMix)
+""",
+    "snapshot values",
+)
+
+new_render = """    private static func render(_ snapshot: RenderSnapshot) -> UIImage? {
+        let renderer = ReferenceAppleMonotoneRenderer.shared
+        let baseOutput: UIImage?
+
+        if snapshot.resolvedMode == .smartLogo {
+            let base = renderer.renderSmartLogo(
+                source: snapshot.source,
+                tint: snapshot.backgroundTint,
+                gradientStart: snapshot.gradientStart,
+                gradientStrength: snapshot.gradientStrength
+            ) ?? renderer.renderTintedBitmap(
+                source: snapshot.source,
+                tint: snapshot.backgroundTint,
+                intensity: snapshot.tintIntensity
+            )
+
+            guard let base else { return nil }
+            baseOutput = BackgroundIntensityProcessor.shared.apply(
+                source: snapshot.source,
+                rendered: base,
+                tint: snapshot.backgroundTint,
+                intensity: snapshot.backgroundIntensity
+            ) ?? base
+        } else {
+            guard let base = renderer.renderTintedBitmap(
+                source: snapshot.source,
+                tint: snapshot.iconTint,
+                intensity: snapshot.tintIntensity
+            ) else {
+                return nil
+            }
+
+            baseOutput = CombinedTintIntensityProcessor.shared.apply(
+                source: snapshot.source,
+                rendered: base,
+                backgroundTint: snapshot.backgroundTint,
+                iconTint: snapshot.iconTint,
+                backgroundIntensity: snapshot.backgroundIntensity,
+                iconIntensity: snapshot.tintIntensity
+            ) ?? base
+        }
+
+        guard let baseOutput else { return nil }
+
+        // Preserve the normal-Tint contract: foreground 100% + background 100% with one color
+        // must stay an exactly solid selected-color icon. Shadows resume below 100%.
+        let preserveSolidTint = snapshot.resolvedMode == .tint &&
+            snapshot.tintVariant == .simple &&
+            snapshot.tintIntensity >= 0.999 &&
+            snapshot.backgroundIntensity >= 0.999
+
+        guard snapshot.shadowsEnabled && !preserveSolidTint else {
+            return baseOutput
+        }
+
+        return IconShadowProcessor.shared.apply(
+            source: snapshot.source,
+            rendered: baseOutput,
+            surfaceColor: snapshot.backgroundTint,
+            shadowColor: snapshot.shadowColor,
+            strength: snapshot.shadowStrength,
+            tintMix: snapshot.shadowTintMix,
+            logoShadows: snapshot.resolvedMode == .smartLogo || snapshot.tintVariant == .advanced
+        ) ?? baseOutput
+    }
+
+    private func renderCurrentIcon"""
+
+pattern = re.compile(
+    r"    private static func render\(_ snapshot: RenderSnapshot\) -> UIImage\? \{.*?\n    \}\n\n    private func renderCurrentIcon",
+    re.S,
+)
+text, count = pattern.subn(new_render, text, count=1)
+if count != 1:
+    raise SystemExit(f"render function replacement count={count}")
+
+save_marker = """                Section {
+                    Button {
+                        guard let finalIcon = renderCurrentIcon() else { return }
+"""
+
+shadow_section = """                Section {
+                    Toggle("Тени", isOn: $shadowsEnabled)
+
+                    if shadowsEnabled {
+                        ColorPicker("Цвет тени", selection: $shadowColor, supportsOpacity: false)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Сила теней")
+                                Spacer()
+                                Text("\\(Int(shadowStrength * 100))%")
+                                    .foregroundStyle(.secondary)
+                            }
+                            AdaptiveSlider(
+                                value: $shadowStrength,
+                                range: 0.0...1.0,
+                                onEditingChanged: sliderEditingChanged
+                            )
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Подкрашивание тени")
+                                Spacer()
+                                Text("\\(Int(shadowTintMix * 100))%")
+                                    .foregroundStyle(.secondary)
+                            }
+                            AdaptiveSlider(
+                                value: $shadowTintMix,
+                                range: 0.0...1.0,
+                                onEditingChanged: sliderEditingChanged
+                            )
+                        }
+                    }
+                } header: {
+                    Text("Тени")
+                } footer: {
+                    Text("По умолчанию: чёрная тень, сила 90%, подкрашивание цветом поверхности 30%. Используются верхний внутренний свет, нижняя/боковая глубина, ambient, контактная тень, тени логотипа и направленный кант. При обычном Tint 100% + 100% тени отключаются автоматически, чтобы сохранить полностью одноцветный результат.")
+                }
+
+"""
+
+if 'Text("Тени")' not in text:
+    replace_once(save_marker, shadow_section + save_marker, "shadow settings section")
+
+replace_once(
+    """        .onChange(of: gradientStrength) { _ in
+            markPreviewDirty()
+        }
+""",
+    """        .onChange(of: gradientStrength) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: shadowsEnabled) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: shadowColorKey) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: shadowStrength) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: shadowTintMix) { _ in
+            markPreviewDirty()
+        }
+""",
+    "shadow dirty observers",
+)
+
+path.write_text(text)
