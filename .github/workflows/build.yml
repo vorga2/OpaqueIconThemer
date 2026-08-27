@@ -66,6 +66,9 @@ jobs:
       - name: Fix Smart Logo tint edge and add gradient toggle
         run: python3 Tools/patch_smart_logo_no_rim_gradient_toggle.py
 
+      - name: Apply Smart Logo NR2 and refine Tint+ background detection
+        run: python3 Tools/patch_smart_logo_v2_and_tint_bg_refine.py
+
       - name: Generate project
         run: xcodegen generate
 
