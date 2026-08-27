@@ -54,6 +54,9 @@ jobs:
       - name: Remove every remaining Tint+ rim source
         run: python3 Tools/patch_remove_tint_rims.py
 
+      - name: Force strict no-outline Tint+ final path
+        run: python3 Tools/patch_force_outline_free_tint.py
+
       - name: Generate project
         run: xcodegen generate
 
@@ -69,6 +72,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            INFOPLIST_KEY_CFBundleVersion="$GITHUB_RUN_NUMBER" \
             build
 
       - name: Pack IPA
