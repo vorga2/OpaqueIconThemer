@@ -1,8 +1,11 @@
 import Foundation
+import Combine
 import SwiftUI
 import UIKit
 import FamilyControls
 import ManagedSettings
+
+private let iconPreviewTicker = Timer.publish(every: 0.10, on: .main, in: .common).autoconnect()
 
 struct ContentView: View {
     @AppStorage("oit.localAppScanAllowed") private var localAppScanAllowed = false
@@ -210,18 +213,48 @@ private struct AppRow: View {
     }
 }
 
+private enum TintVariant: String, CaseIterable, Identifiable {
+    case simple
+    case advanced
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .simple: return "Обычный"
+        case .advanced: return "Расширенный"
+        }
+    }
+}
+
 private struct AppTintView: View {
     let app: InstalledAppInfo
+
+    private struct RenderSnapshot {
+        let source: UIImage
+        let resolvedMode: IconRenderMode
+        let tintVariant: TintVariant
+        let backgroundTint: UIColor
+        let iconTint: UIColor
+        let tintIntensity: CGFloat
+        let backgroundIntensity: CGFloat
+        let gradientStart: CGFloat
+        let gradientStrength: CGFloat
+    }
 
     @State private var tintColor: Color = .blue
     @State private var iconTintColor: Color = .blue
     @State private var mode: IconRenderMode = .auto
+    @State private var tintVariant: TintVariant = .simple
     @State private var tintIntensity: Double = 0.88
     @State private var backgroundIntensity: Double = 0.72
     @State private var gradientStart: Double = 0.0
     @State private var gradientStrength: Double = 0.45
     @State private var autoResolvedMode: IconRenderMode = .tint
     @State private var previewIcon: UIImage?
+    @State private var previewRevision = 1
+    @State private var renderedRevision = 0
+    @State private var renderInFlight = false
     @StateObject private var shortcutHelper = ShortcutHelper()
 
     private var resolvedMode: IconRenderMode {
@@ -243,67 +276,114 @@ private struct AppTintView: View {
         UIColor(iconTintColor).description
     }
 
-    private func renderCurrentIcon() -> UIImage? {
+    private func makeRenderSnapshot() -> RenderSnapshot? {
         guard let source = app.icon else { return nil }
-        let renderer = ReferenceAppleMonotoneRenderer.shared
         let backgroundTint = UIColor(tintColor)
-        let iconTint = UIColor(iconTintColor)
+        let effectiveIconTint: UIColor
 
-        if resolvedMode == .smartLogo {
+        if resolvedMode == .tint && tintVariant == .advanced {
+            effectiveIconTint = UIColor(iconTintColor)
+        } else {
+            // In normal Tint the whole icon uses one selected color. This also guarantees that
+            // tint=100% + background=100% resolves to exactly one solid tint color.
+            effectiveIconTint = backgroundTint
+        }
+
+        return RenderSnapshot(
+            source: source,
+            resolvedMode: resolvedMode,
+            tintVariant: tintVariant,
+            backgroundTint: backgroundTint,
+            iconTint: effectiveIconTint,
+            tintIntensity: CGFloat(tintIntensity),
+            backgroundIntensity: CGFloat(backgroundIntensity),
+            gradientStart: CGFloat(gradientStart),
+            gradientStrength: CGFloat(gradientStrength)
+        )
+    }
+
+    private static func render(_ snapshot: RenderSnapshot) -> UIImage? {
+        let renderer = ReferenceAppleMonotoneRenderer.shared
+
+        if snapshot.resolvedMode == .smartLogo {
             let base = renderer.renderSmartLogo(
-                source: source,
-                tint: backgroundTint,
-                gradientStart: CGFloat(gradientStart),
-                gradientStrength: CGFloat(gradientStrength)
+                source: snapshot.source,
+                tint: snapshot.backgroundTint,
+                gradientStart: snapshot.gradientStart,
+                gradientStrength: snapshot.gradientStrength
             ) ?? renderer.renderTintedBitmap(
-                source: source,
-                tint: iconTint,
-                intensity: CGFloat(tintIntensity)
+                source: snapshot.source,
+                tint: snapshot.backgroundTint,
+                intensity: snapshot.tintIntensity
             )
 
             guard let base else { return nil }
             return BackgroundIntensityProcessor.shared.apply(
-                source: source,
+                source: snapshot.source,
                 rendered: base,
-                tint: backgroundTint,
-                intensity: CGFloat(backgroundIntensity)
+                tint: snapshot.backgroundTint,
+                intensity: snapshot.backgroundIntensity
             ) ?? base
         }
 
         guard let base = renderer.renderTintedBitmap(
-            source: source,
-            tint: iconTint,
-            intensity: CGFloat(tintIntensity)
+            source: snapshot.source,
+            tint: snapshot.iconTint,
+            intensity: snapshot.tintIntensity
         ) else {
             return nil
         }
 
         return CombinedTintIntensityProcessor.shared.apply(
-            source: source,
+            source: snapshot.source,
             rendered: base,
-            backgroundTint: backgroundTint,
-            iconTint: iconTint,
-            backgroundIntensity: CGFloat(backgroundIntensity),
-            iconIntensity: CGFloat(tintIntensity)
+            backgroundTint: snapshot.backgroundTint,
+            iconTint: snapshot.iconTint,
+            backgroundIntensity: snapshot.backgroundIntensity,
+            iconIntensity: snapshot.tintIntensity
         ) ?? base
     }
 
-    private func refreshPreview() {
-        previewIcon = renderCurrentIcon()
+    private func renderCurrentIcon() -> UIImage? {
+        guard let snapshot = makeRenderSnapshot() else { return nil }
+        return Self.render(snapshot)
+    }
+
+    private func markPreviewDirty() {
+        previewRevision += 1
+    }
+
+    private func refreshPreviewIfNeeded(force: Bool = false) {
+        guard !renderInFlight else { return }
+        let revision = previewRevision
+        guard force || revision != renderedRevision else { return }
+        guard let snapshot = makeRenderSnapshot() else { return }
+
+        renderInFlight = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let image = Self.render(snapshot)
+            DispatchQueue.main.async {
+                if let image, revision >= renderedRevision {
+                    previewIcon = image
+                }
+                renderedRevision = revision
+                renderInFlight = false
+            }
+        }
     }
 
     private func sliderEditingChanged(_ editing: Bool) {
-        // Heavy 512px segmentation/rendering is intentionally deferred until finger-up.
-        // The slider and percentage text therefore stay smooth while dragging.
         if !editing {
-            refreshPreview()
+            markPreviewDirty()
+            refreshPreviewIfNeeded(force: true)
         }
     }
 
     private var resultTitle: String {
         switch resolvedMode {
         case .smartLogo: return "Apple Mono"
-        case .tint: return "Apple Tint"
+        case .tint:
+            return tintVariant == .advanced ? "Apple Tint+" : "Apple Tint"
         case .auto: return "Результат"
         }
     }
@@ -338,6 +418,15 @@ private struct AppTintView: View {
                     }
                     .pickerStyle(.segmented)
 
+                    if resolvedMode == .tint {
+                        Picker("Тип тинта", selection: $tintVariant) {
+                            ForEach(TintVariant.allCases) { variant in
+                                Text(variant.title).tag(variant)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
                     if mode == .auto {
                         HStack {
                             Text("Авто выбрало")
@@ -356,9 +445,13 @@ private struct AppTintView: View {
                 }
 
                 Section {
-                    ColorPicker("Цвет фона", selection: $tintColor, supportsOpacity: false)
+                    ColorPicker(
+                        resolvedMode == .tint && tintVariant == .advanced ? "Цвет фона" : "Цвет тинта",
+                        selection: $tintColor,
+                        supportsOpacity: false
+                    )
 
-                    if resolvedMode == .tint {
+                    if resolvedMode == .tint && tintVariant == .advanced {
                         ColorPicker("Цвет иконки", selection: $iconTintColor, supportsOpacity: false)
                     }
 
@@ -394,8 +487,10 @@ private struct AppTintView: View {
                 } header: {
                     Text("Цвет")
                 } footer: {
-                    if resolvedMode == .tint {
-                        Text("Сила тинта и интенсивность фона считаются одновременно. Если оба цвета одинаковые и оба значения 100%, итоговая иконка становится полностью этим цветом. Цвет иконки можно менять отдельно от цвета фона.")
+                    if resolvedMode == .tint && tintVariant == .advanced {
+                        Text("Расширенный Tint: цвет фона и цвет элементов задаются отдельно. Интенсивность фона и сила тинта продолжают работать одновременно.")
+                    } else if resolvedMode == .tint {
+                        Text("Обычный Tint использует один цвет. Интенсивность фона и сила тинта работают одновременно; при 100% + 100% вся иконка становится ровно выбранным цветом.")
                     } else {
                         Text("Интенсивность фона усиливает выбранный цвет только в фоне, не ломая Mono-слои логотипа.")
                     }
@@ -412,7 +507,7 @@ private struct AppTintView: View {
                             }
                             AdaptiveSlider(
                                 value: $gradientStart,
-                                range: 0.0...0.80,
+                                range: 0.0...1.0,
                                 onEditingChanged: sliderEditingChanged
                             )
                         }
@@ -426,14 +521,14 @@ private struct AppTintView: View {
                             }
                             AdaptiveSlider(
                                 value: $gradientStrength,
-                                range: 0.0...0.45,
+                                range: 0.0...1.0,
                                 onEditingChanged: sliderEditingChanged
                             )
                         }
                     } header: {
                         Text("Градиент логотипа")
                     } footer: {
-                        Text("По умолчанию: начало 0%, интенсивность 45%. Mono-форма считается в linear-light, полупрозрачность и антиалиасинг деталей сохраняются в композите, а итоговая PNG полностью непрозрачная.")
+                        Text("Диапазон обоих параметров 0–100%. По умолчанию: начало 0%, интенсивность 45%. Mono-форма считается в linear-light, полупрозрачность и антиалиасинг деталей сохраняются в композите, а итоговая PNG полностью непрозрачная.")
                     }
                 }
 
@@ -492,29 +587,51 @@ private struct AppTintView: View {
             if let source = app.icon {
                 autoResolvedMode = IconStyleRenderer.shared.resolvedMode(source: source, requested: .auto)
             }
-            refreshPreview()
+            markPreviewDirty()
+            refreshPreviewIfNeeded(force: true)
+        }
+        .onReceive(iconPreviewTicker) { _ in
+            // Preview is rendered at most 10 times per second. Rendering happens off the main
+            // thread, so dragging a slider does not force a 512px image pass on every touch event.
+            refreshPreviewIfNeeded()
         }
         .onChange(of: mode) { _ in
-            refreshPreview()
+            markPreviewDirty()
+        }
+        .onChange(of: tintVariant) { _ in
+            markPreviewDirty()
         }
         .onChange(of: backgroundColorKey) { _ in
-            refreshPreview()
+            markPreviewDirty()
         }
         .onChange(of: iconColorKey) { _ in
-            if resolvedMode == .tint {
-                refreshPreview()
-            }
+            markPreviewDirty()
+        }
+        .onChange(of: tintIntensity) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: backgroundIntensity) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: gradientStart) { _ in
+            markPreviewDirty()
+        }
+        .onChange(of: gradientStrength) { _ in
+            markPreviewDirty()
         }
     }
 
     private var modeDescription: String {
         switch mode {
         case .auto:
-            return "Авто оставляет простые логотипные иконки в Apple Mono-пайплайне, а сложные и игровые переводит в Apple Tint по всей картинке."
+            return "Авто оставляет простые логотипные иконки в Apple Mono-пайплайне, а сложные и игровые переводит в Apple Tint. Для Tint доступны обычный и расширенный варианты."
         case .smartLogo:
             return "Сегментирует главный знак мягкой маской, сохраняет alpha/антиалиасинг и тональный объём, считает luminance в linear-light sRGB и делает фон полностью непрозрачным."
         case .tint:
-            return "Для игр и детализированных иконок: фон и детали управляются раздельно. Сила тинта отвечает за элементы иконки, интенсивность фона — за фон; оба значения смешиваются в одном linear-light проходе."
+            if tintVariant == .advanced {
+                return "Расширенный Tint: отдельные цвета фона и элементов плюс независимые интенсивности, сведённые в одном linear-light проходе."
+            }
+            return "Обычный Tint: один выбранный цвет, сила тинта и интенсивность фона. На 100% + 100% результат становится полностью выбранным цветом."
         }
     }
 
